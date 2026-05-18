@@ -83,6 +83,7 @@ Search it:
 
 ```bash
 qli search "API authentication"
+qli search --source-type rss --since 2026-05-01 --has-publication-date
 ```
 
 Find related documents for an existing one:
@@ -191,6 +192,7 @@ Current source types:
 - `directory`
 - `url`
 - `website`
+- `rss`
 - `markdown`
 - `text`
 
@@ -288,6 +290,9 @@ Search:
 ```bash
 qli search "pricing API limits"
 qli search "refund policy" --tag support --top-k 20
+qli search --source-type rss,url --since 2026-05-01 --has-publication-date --top-k 25
+qli search --source-name "Release Feed,Company Blog" --uri-prefix https://example.com/news,https://example.com/blog
+qli search --source-type rss,url --top-k 25 --json
 qli search "authentication" --json
 ```
 

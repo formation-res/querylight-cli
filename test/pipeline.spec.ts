@@ -2,6 +2,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { saveChunks } from "../src/chunk/chunk-store.js";
+import { writeJsonl } from "../src/core/jsonl.js";
 import { chunkDocuments } from "../src/chunk/chunker.js";
 import { buildChunksForDocument } from "../src/chunk/chunker.js";
 import { loadChunks } from "../src/chunk/chunk-store.js";
@@ -145,6 +147,153 @@ describe("pipeline behavior", () => {
       metadata: [{ key: "team", value: "success" }]
     });
     expect(metadataFiltered.results.length).toBeGreaterThan(0);
+  });
+
+  it("supports source, uri, and date filters and lists latest documents when query is omitted", async () => {
+    const root = await tempWorkspace();
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const rssSource = await addSource(workspacePath, {
+      type: "rss",
+      uri: "https://example.com/feed.xml",
+      name: "Release Feed",
+      enabled: true,
+      tags: ["news"],
+      metadata: {},
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+    const docsSource = await addSource(workspacePath, {
+      type: "directory",
+      uri: docsDir,
+      name: "Docs",
+      enabled: true,
+      tags: ["docs"],
+      metadata: {},
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    const olderPath = path.join(workspacePath, "normalized", "rss-old.md");
+    const newerPath = path.join(workspacePath, "normalized", "rss-new.md");
+    const docsPath = path.join(workspacePath, "normalized", "docs.md");
+    await writeFile(olderPath, "# Older Release\n\nFirst article body.\n", "utf8");
+    await writeFile(newerPath, "# New Release\n\nSecond article body.\n", "utf8");
+    await writeFile(docsPath, "# Product Docs\n\nReference material.\n", "utf8");
+
+    const documents = [
+      {
+        id: "doc-rss-old",
+        sourceId: rssSource.id,
+        sourceType: "rss" as const,
+        title: "Older Release",
+        uri: "https://example.com/old",
+        sourceUri: rssSource.uri,
+        mimeType: "text/markdown",
+        normalizedPath: olderPath,
+        contentHash: "hash-old",
+        metadata: { tags: ["news"], sourceType: "rss" },
+        publicationDate: "2026-05-10T09:00:00.000Z",
+        firstSeenAt: "2026-05-10T10:00:00.000Z",
+        lastSeenAt: "2026-05-10T10:00:00.000Z",
+        lastChangedAt: "2026-05-10T10:00:00.000Z"
+      },
+      {
+        id: "doc-rss-new",
+        sourceId: rssSource.id,
+        sourceType: "rss" as const,
+        title: "New Release",
+        uri: "https://example.com/new",
+        sourceUri: rssSource.uri,
+        mimeType: "text/markdown",
+        normalizedPath: newerPath,
+        contentHash: "hash-new",
+        metadata: { tags: ["news"], sourceType: "rss" },
+        publicationDate: "2026-05-17T09:00:00.000Z",
+        firstSeenAt: "2026-05-17T10:00:00.000Z",
+        lastSeenAt: "2026-05-17T10:00:00.000Z",
+        lastChangedAt: "2026-05-17T10:00:00.000Z"
+      },
+      {
+        id: "doc-docs",
+        sourceId: docsSource.id,
+        sourceType: "directory" as const,
+        title: "Product Docs",
+        uri: "file:///docs/reference",
+        sourceUri: docsSource.uri,
+        mimeType: "text/markdown",
+        normalizedPath: docsPath,
+        contentHash: "hash-docs",
+        metadata: { tags: ["docs"], sourceType: "directory" },
+        firstSeenAt: "2026-05-16T10:00:00.000Z",
+        lastSeenAt: "2026-05-16T10:00:00.000Z",
+        lastChangedAt: "2026-05-16T10:00:00.000Z"
+      }
+    ];
+    await writeJsonl(path.join(workspacePath, "documents", "documents.jsonl"), documents);
+    await saveChunks(workspacePath, [
+      {
+        id: "chunk-rss-old",
+        documentId: "doc-rss-old",
+        sourceId: rssSource.id,
+        title: "Older Release",
+        uri: "https://example.com/old",
+        headingPath: ["Older Release"],
+        text: "First article body.",
+        contentHash: "chunk-hash-old",
+        metadata: { tags: ["news"], sourceType: "rss" },
+        firstSeenAt: "2026-05-10T10:00:00.000Z",
+        lastSeenAt: "2026-05-10T10:00:00.000Z",
+        lastChangedAt: "2026-05-10T10:00:00.000Z"
+      },
+      {
+        id: "chunk-rss-new",
+        documentId: "doc-rss-new",
+        sourceId: rssSource.id,
+        title: "New Release",
+        uri: "https://example.com/new",
+        headingPath: ["New Release"],
+        text: "Second article body.",
+        contentHash: "chunk-hash-new",
+        metadata: { tags: ["news"], sourceType: "rss" },
+        firstSeenAt: "2026-05-17T10:00:00.000Z",
+        lastSeenAt: "2026-05-17T10:00:00.000Z",
+        lastChangedAt: "2026-05-17T10:00:00.000Z"
+      },
+      {
+        id: "chunk-docs",
+        documentId: "doc-docs",
+        sourceId: docsSource.id,
+        title: "Product Docs",
+        uri: "file:///docs/reference",
+        headingPath: ["Product Docs"],
+        text: "Reference material.",
+        contentHash: "chunk-hash-docs",
+        metadata: { tags: ["docs"], sourceType: "directory" },
+        firstSeenAt: "2026-05-16T10:00:00.000Z",
+        lastSeenAt: "2026-05-16T10:00:00.000Z",
+        lastChangedAt: "2026-05-16T10:00:00.000Z"
+      }
+    ]);
+    await buildIndex({ workspacePath });
+
+    const latestRss = await searchIndex({
+      workspacePath,
+      query: "",
+      topK: 5,
+      sourceNames: ["release feed", "missing source"],
+      sourceTypes: ["rss", "url"],
+      uriPrefixes: ["https://example.com/ne", "https://example.com/unused"],
+      hasPublicationDate: true,
+      dateRanges: [
+        { field: "publicationDate", from: "2026-05-11T00:00:00.000Z" },
+        { field: "lastChangedAt", from: "2026-05-17T00:00:00.000Z" }
+      ]
+    });
+
+    expect(latestRss.results).toHaveLength(1);
+    expect(latestRss.results[0]?.title).toBe("New Release");
+    expect(latestRss.results[0]?.sourceType).toBe("rss");
+    expect(latestRss.results[0]?.publicationDate).toBe("2026-05-17T09:00:00.000Z");
   });
 
   it("creates bounded context blocks with chunk citations", async () => {

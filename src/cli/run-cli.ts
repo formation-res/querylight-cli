@@ -30,6 +30,9 @@ const SOURCE_TYPES = new Set<SourceType>(["url", "website", "rss", "file", "dire
 const RETRIEVAL_MODES = new Set<RetrievalMode>(["lexical", "dense", "sparse", "hybrid"]);
 const SOURCE_TYPE_LIST = ["url", "website", "rss", "file", "directory", "markdown", "text"] as const;
 const RETRIEVAL_MODE_LIST = ["lexical", "dense", "sparse", "hybrid"] as const;
+const SEARCH_DATE_FIELDS = ["publicationDate", "firstSeenAt", "lastSeenAt", "lastChangedAt", "crawledAt"] as const;
+
+type SearchDateField = typeof SEARCH_DATE_FIELDS[number];
 
 function parseKeyValue(input: string): [string, string] {
   const idx = input.indexOf("=");
@@ -66,6 +69,72 @@ function parseRetrievalMode(input: string | undefined): RetrievalMode | undefine
     throw new CliError(`unsupported retrieval mode: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
   }
   return input as RetrievalMode;
+}
+
+function parseSourceType(input: string | undefined): SourceType | undefined {
+  if (!input) {
+    return undefined;
+  }
+  if (!SOURCE_TYPES.has(input as SourceType)) {
+    throw new CliError(`unsupported source type: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return input as SourceType;
+}
+
+function parseCommaSeparatedList(input: string | undefined): string[] | undefined {
+  const values = (input ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function parseSourceTypes(input: string | undefined): SourceType[] | undefined {
+  const values = parseCommaSeparatedList(input);
+  if (!values) {
+    return undefined;
+  }
+  return values.map((value) => parseSourceType(value) as SourceType);
+}
+
+function parseDateValue(input: string, optionName: string): string {
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new CliError(`invalid date for ${optionName}: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return parsed.toISOString();
+}
+
+function searchDateRanges(options: Record<string, string | undefined>): Array<{ field: SearchDateField; from?: string; to?: string }> {
+  const entries: Array<{ field: SearchDateField; from?: string; to?: string }> = [];
+  if (options.since || options.until) {
+    entries.push({
+      field: "publicationDate",
+      from: options.since ? parseDateValue(options.since, "--since") : undefined,
+      to: options.until ? parseDateValue(options.until, "--until") : undefined
+    });
+  }
+  if (options.changedSince) {
+    entries.push({
+      field: "lastChangedAt",
+      from: parseDateValue(options.changedSince, "--changed-since")
+    });
+  }
+  for (const field of SEARCH_DATE_FIELDS) {
+    const fromKey = `${field}From`;
+    const toKey = `${field}To`;
+    const from = options[fromKey];
+    const to = options[toKey];
+    if (!from && !to) {
+      continue;
+    }
+    entries.push({
+      field,
+      from: from ? parseDateValue(from, `--${field}-from`) : undefined,
+      to: to ? parseDateValue(to, `--${field}-to`) : undefined
+    });
+  }
+  return entries;
 }
 
 async function resolveWorkspace(options: { workspace?: string }): Promise<string> {
@@ -337,33 +406,59 @@ Examples:
 
   program.command("search")
     .description("Search the built index and return ranked matching documents or chunks.")
-    .argument("<query>")
+    .argument("[query]", "Text query. Omit it to list the latest matching documents.")
     .option("--top-k <n>", "Maximum number of results to return.", "12")
-    .option("--source <sourceId>", "Restrict results to one source.")
-    .option("--tag <tag>", "Restrict results to sources carrying a specific tag.")
+    .option("--source <sourceIds>", "Restrict results to one or more source ids. Use comma-separated values.")
+    .option("--source-name <names>", "Restrict results to one or more source names. Use comma-separated values.")
+    .option("--source-type <types>", `Restrict results to one or more source types. Use comma-separated values: ${SOURCE_TYPE_LIST.join(", ")}`)
+    .option("--uri-prefix <prefixes>", "Restrict results to one or more URI prefixes. Use comma-separated values.")
+    .option("--tag <tags>", "Restrict results to one or more source tags. Use comma-separated values.")
     .option("--metadata <key=value...>", "Restrict results to sources with matching metadata.")
+    .option("--since <date>", "Shortcut for --publication-date-from.")
+    .option("--until <date>", "Shortcut for --publication-date-to.")
+    .option("--changed-since <date>", "Only include documents changed on or after this date.")
+    .option("--has-publication-date", "Only include documents with a publication date.")
+    .option("--publication-date-from <date>", "Only include documents published on or after this date.")
+    .option("--publication-date-to <date>", "Only include documents published on or before this date.")
+    .option("--first-seen-at-from <date>", "Only include documents first seen on or after this date.")
+    .option("--first-seen-at-to <date>", "Only include documents first seen on or before this date.")
+    .option("--last-seen-at-from <date>", "Only include documents last seen on or after this date.")
+    .option("--last-seen-at-to <date>", "Only include documents last seen on or before this date.")
+    .option("--last-changed-at-from <date>", "Only include documents changed on or after this date.")
+    .option("--last-changed-at-to <date>", "Only include documents changed on or before this date.")
+    .option("--crawled-at-from <date>", "Only include documents crawled on or after this date.")
+    .option("--crawled-at-to <date>", "Only include documents crawled on or before this date.")
     .option("--retrieval <mode>", `Retrieval mode: ${RETRIEVAL_MODE_LIST.join(", ")}`)
     .option("--show-chunks", "Return chunk-level matches when available.")
     .addHelpText("after", `
 Examples:
   qli search "pricing api limits"
   qli search "authentication" --top-k 20 --tag docs
+  qli search --source-type rss --since 2026-05-01 --has-publication-date
+  qli search --source-name "Release Feed,Company Blog" --uri-prefix https://example.com/news,https://example.com/blog
   qli search "billing" --metadata team=support
   qli search "embedding model" --retrieval hybrid --show-chunks
+  qli search --source-type rss,url --top-k 25 --json
 
 Notes:
   lexical works without vector models.
-  dense, sparse, and hybrid require the relevant index artifacts to exist.`)
-    .action(async function command(query: string, options) {
+  dense, sparse, and hybrid require the relevant index artifacts to exist.
+  When you omit the query, qli returns the latest matching documents sorted by publication date.`)
+    .action(async function command(query: string | undefined, options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
       const result = await searchIndex({
         workspacePath: workspace,
-        query,
+        query: query ?? "",
         topK: Number(options.topK),
-        sourceId: options.source,
-        tag: options.tag,
+        sourceIds: parseCommaSeparatedList(options.source),
+        sourceNames: parseCommaSeparatedList(options.sourceName),
+        sourceTypes: parseSourceTypes(options.sourceType),
+        uriPrefixes: parseCommaSeparatedList(options.uriPrefix),
+        hasPublicationDate: Boolean(options.hasPublicationDate),
+        tags: parseCommaSeparatedList(options.tag),
         metadata: ((options.metadata ?? []) as string[]).map(parseKeyValue).map(([key, value]: [string, string]) => ({ key, value })),
+        dateRanges: searchDateRanges(options),
         retrievalMode: parseRetrievalMode(options.retrieval),
         showChunks: Boolean(options.showChunks)
       });

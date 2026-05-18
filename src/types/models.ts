@@ -231,12 +231,17 @@ export type SearchResult = {
   chunkId: string;
   documentId: string;
   sourceId: string;
+  sourceType: SourceType;
   score: number;
   title: string;
   uri: string;
   headingPath: string[];
   snippet: string;
   text?: string;
+  publicationDate?: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastChangedAt: string;
   metadata: Record<string, unknown>;
 };
 

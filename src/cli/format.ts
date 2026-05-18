@@ -14,6 +14,8 @@ export function formatSearchResults(results: SearchResult[]): string {
   return results.map((result, index) => [
     `${index + 1}. ${colors.bold(result.title)}`,
     `   ${result.uri}`,
+    `   Source type: ${result.sourceType}`,
+    `   Published: ${result.publicationDate ?? "n/a"}`,
     `   Score: ${result.score.toFixed(3)}`,
     `   ${result.snippet}`
   ].join("\n")).join("\n\n");

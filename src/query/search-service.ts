@@ -6,7 +6,7 @@ import { loadConfig } from "../core/config.js";
 import { CliError, ExitCode } from "../core/errors.js";
 import { fileExists } from "../core/files.js";
 import { readJsonl } from "../core/jsonl.js";
-import type { ChunkRecord, DocumentRecord, RetrievalMode, SearchResponseData, SearchResult, WorkspaceConfig } from "../types/models.js";
+import type { ChunkRecord, DocumentRecord, RetrievalMode, SearchResponseData, SearchResult, Source, WorkspaceConfig } from "../types/models.js";
 import { readLatestIndexState } from "../index/index-store.js";
 import { createIndexMapping } from "../index/querylight-indexer.js";
 import { denseQuery } from "../vector/dense.js";
@@ -19,10 +19,52 @@ async function loadHydratedIndex(workspacePath: string): Promise<DocumentIndex> 
   return new (await import("@tryformation/querylight-ts")).DocumentIndex(mapping).loadState(state as never);
 }
 
+type SearchDateField = "publicationDate" | "firstSeenAt" | "lastSeenAt" | "lastChangedAt" | "crawledAt";
+
+type SearchDateRange = {
+  field: SearchDateField;
+  from?: string;
+  to?: string;
+};
+
+type SearchFilters = {
+  sourceId?: string;
+  sourceIds?: string[];
+  sourceName?: string;
+  sourceNames?: string[];
+  sourceType?: string;
+  sourceTypes?: string[];
+  uriPrefix?: string;
+  uriPrefixes?: string[];
+  hasPublicationDate?: boolean;
+  tag?: string;
+  tags?: string[];
+  metadata?: Array<{ key: string; value: string }>;
+};
+
+function normalizeFilterValues(values: string[] | undefined): string[] {
+  return (values ?? []).map((value) => value.toLowerCase()).filter(Boolean);
+}
+
+function matchesAny(value: string, candidates: string[]): boolean {
+  return candidates.length === 0 || candidates.includes(value.toLowerCase());
+}
+
+function matchesPrefix(value: string, prefixes: string[]): boolean {
+  if (prefixes.length === 0) {
+    return true;
+  }
+  const lower = value.toLowerCase();
+  return prefixes.some((prefix) => lower.startsWith(prefix));
+}
+
 function buildSearchQuery(
   query: string,
-  filters: { sourceId?: string; tag?: string; metadata?: Array<{ key: string; value: string }> }
+  filters: SearchFilters
 ): BoolQuery {
+  const sourceIds = normalizeFilterValues([filters.sourceId, ...(filters.sourceIds ?? [])].filter((value): value is string => Boolean(value)));
+  const sourceTypes = normalizeFilterValues([filters.sourceType, ...(filters.sourceTypes ?? [])].filter((value): value is string => Boolean(value)));
+  const tags = normalizeFilterValues([filters.tag, ...(filters.tags ?? [])].filter((value): value is string => Boolean(value)));
   return new BoolQuery({
     should: [
       new MatchQuery({ field: "title", text: query, operation: OP.AND, boost: 6 }),
@@ -30,11 +72,121 @@ function buildSearchQuery(
       new MatchQuery({ field: "text", text: query, operation: OP.OR, boost: 2 })
     ],
     filter: [
-      ...(filters.sourceId ? [new TermQuery({ field: "sourceId", text: filters.sourceId.toLowerCase() })] : []),
-      ...(filters.tag ? [new TermQuery({ field: "tags", text: filters.tag.toLowerCase() })] : []),
+      ...(sourceIds.length === 1 ? [new TermQuery({ field: "sourceId", text: sourceIds[0]! })] : []),
+      ...(sourceTypes.length === 1 ? [new TermQuery({ field: "sourceType", text: sourceTypes[0]! })] : []),
+      ...(tags.length === 1 ? [new TermQuery({ field: "tags", text: tags[0]! })] : []),
       ...(filters.metadata ?? []).map(({ key, value }) => new TermQuery({ field: `metadata.${key}`, text: value.toLowerCase() }))
     ]
   });
+}
+
+function isValidDate(value: string | undefined): value is string {
+  return typeof value === "string" && !Number.isNaN(new Date(value).getTime());
+}
+
+function documentDateValue(document: DocumentRecord, field: SearchDateField): string | null {
+  const value = document[field];
+  return typeof value === "string" && isValidDate(value) ? value : null;
+}
+
+function matchesDateRanges(document: DocumentRecord, dateRanges: SearchDateRange[]): boolean {
+  return dateRanges.every(({ field, from, to }) => {
+    const value = documentDateValue(document, field);
+    if (!value) {
+      return false;
+    }
+    const timestamp = new Date(value).getTime();
+    const fromTime = from ? new Date(from).getTime() : null;
+    const toTime = to ? new Date(to).getTime() : null;
+    return (fromTime == null || timestamp >= fromTime) && (toTime == null || timestamp <= toTime);
+  });
+}
+
+function filterChunk(
+  chunk: ChunkRecord,
+  document: DocumentRecord | undefined,
+  source: Source | undefined,
+  {
+    sourceId,
+    sourceIds,
+    sourceName,
+    sourceNames,
+    sourceType,
+    sourceTypes,
+    uriPrefix,
+    uriPrefixes,
+    hasPublicationDate,
+    tag,
+    tags,
+    metadata,
+    dateRanges
+  }: SearchFilters & { dateRanges: SearchDateRange[] }
+): boolean {
+  const normalizedSourceIds = normalizeFilterValues([sourceId, ...(sourceIds ?? [])].filter((value): value is string => Boolean(value)));
+  const normalizedSourceNames = normalizeFilterValues([sourceName, ...(sourceNames ?? [])].filter((value): value is string => Boolean(value)));
+  const normalizedSourceTypes = normalizeFilterValues([sourceType, ...(sourceTypes ?? [])].filter((value): value is string => Boolean(value)));
+  const normalizedUriPrefixes = normalizeFilterValues([uriPrefix, ...(uriPrefixes ?? [])].filter((value): value is string => Boolean(value)));
+  const normalizedTags = normalizeFilterValues([tag, ...(tags ?? [])].filter((value): value is string => Boolean(value)));
+  if (!document) {
+    return false;
+  }
+  if (!matchesAny(chunk.sourceId, normalizedSourceIds)) {
+    return false;
+  }
+  if (!matchesAny(document.sourceType, normalizedSourceTypes)) {
+    return false;
+  }
+  if (normalizedSourceNames.length > 0 && !matchesAny(source?.name ?? "", normalizedSourceNames)) {
+    return false;
+  }
+  if (!matchesPrefix(document.uri, normalizedUriPrefixes)) {
+    return false;
+  }
+  if (hasPublicationDate && !documentDateValue(document, "publicationDate")) {
+    return false;
+  }
+  if (normalizedTags.length > 0) {
+    const tags = Array.isArray(chunk.metadata.tags) ? chunk.metadata.tags.map(String).map((value) => value.toLowerCase()) : [];
+    if (!normalizedTags.some((tag) => tags.includes(tag))) {
+      return false;
+    }
+  }
+  if (metadata?.length) {
+    const metadataMatches = metadata.every(({ key, value }) => {
+      const candidate = chunk.metadata[key];
+      return Array.isArray(candidate) ? candidate.map(String).map((item) => item.toLowerCase()).includes(value.toLowerCase()) : String(candidate ?? "").toLowerCase() === value.toLowerCase();
+    });
+    if (!metadataMatches) {
+      return false;
+    }
+  }
+  return matchesDateRanges(document, dateRanges);
+}
+
+function sortDateDescending(left: string | null, right: string | null): number {
+  const leftTime = left ? new Date(left).getTime() : Number.NEGATIVE_INFINITY;
+  const rightTime = right ? new Date(right).getTime() : Number.NEGATIVE_INFINITY;
+  return rightTime - leftTime;
+}
+
+function latestSortDate(document: DocumentRecord): string | null {
+  return documentDateValue(document, "publicationDate")
+    ?? documentDateValue(document, "lastChangedAt")
+    ?? documentDateValue(document, "lastSeenAt")
+    ?? documentDateValue(document, "firstSeenAt")
+    ?? documentDateValue(document, "crawledAt");
+}
+
+function representativeChunk(chunks: ChunkRecord[]): ChunkRecord | undefined {
+  return [...chunks].sort((left, right) => {
+    if (left.headingPath.length !== right.headingPath.length) {
+      return left.headingPath.length - right.headingPath.length;
+    }
+    if (left.uri !== right.uri) {
+      return left.uri.localeCompare(right.uri);
+    }
+    return left.id.localeCompare(right.id);
+  })[0] ?? chunks[0] ?? undefined;
 }
 
 function stripSnippetMarkdown(text: string): string {
@@ -320,8 +472,18 @@ export async function searchIndex(
     query,
     topK,
     sourceId,
+    sourceIds,
+    sourceName,
+    sourceNames,
+    sourceType,
+    sourceTypes,
+    uriPrefix,
+    uriPrefixes,
+    hasPublicationDate,
     tag,
+    tags,
     metadata,
+    dateRanges = [],
     retrievalMode,
     showChunks = false
   }: {
@@ -329,8 +491,18 @@ export async function searchIndex(
     query: string;
     topK: number;
     sourceId?: string;
+    sourceIds?: string[];
+    sourceName?: string;
+    sourceNames?: string[];
+    sourceType?: string;
+    sourceTypes?: string[];
+    uriPrefix?: string;
+    uriPrefixes?: string[];
+    hasPublicationDate?: boolean;
     tag?: string;
+    tags?: string[];
     metadata?: Array<{ key: string; value: string }>;
+    dateRanges?: SearchDateRange[];
     retrievalMode?: RetrievalMode;
     showChunks?: boolean;
   }
@@ -340,17 +512,71 @@ export async function searchIndex(
   const candidateLimit = Math.max(topK * 5, 50);
   const chunks = new Map((await readJsonl<ChunkRecord>(path.join(workspacePath, "chunks", "chunks.jsonl"))).map((chunk) => [chunk.id, chunk]));
   const documents = new Map((await readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl"))).map((document) => [document.id, document]));
+  const sources = new Map((await readJsonl<Source>(path.join(workspacePath, "sources", "sources.jsonl"))).map((source) => [source.id, source]));
   const orderedChunkCache = new Map<string, ChunkRecord[]>();
+  const normalizedQuery = query.trim();
   const filterIds = [...chunks.values()]
-    .filter((chunk) => (!sourceId || chunk.sourceId === sourceId) && (!tag || (Array.isArray(chunk.metadata.tags) && chunk.metadata.tags.map(String).map((value) => value.toLowerCase()).includes(tag.toLowerCase()))) && (!(metadata?.length) || metadata.every(({ key, value }) => {
-      const candidate = chunk.metadata[key];
-      return Array.isArray(candidate) ? candidate.map(String).map((item) => item.toLowerCase()).includes(value.toLowerCase()) : String(candidate ?? "").toLowerCase() === value.toLowerCase();
-    })))
+    .filter((chunk) => filterChunk(chunk, documents.get(chunk.documentId), sources.get(chunk.sourceId), { sourceId, sourceIds, sourceName, sourceNames, sourceType, sourceTypes, uriPrefix, uriPrefixes, hasPublicationDate, tag, tags, metadata, dateRanges }))
     .map((chunk) => chunk.id);
+
+  if (normalizedQuery.length === 0) {
+    const chunksByDocument = new Map<string, ChunkRecord[]>();
+    for (const chunkId of filterIds) {
+      const chunk = chunks.get(chunkId);
+      if (!chunk) {
+        continue;
+      }
+      const existing = chunksByDocument.get(chunk.documentId);
+      if (existing) {
+        existing.push(chunk);
+      } else {
+        chunksByDocument.set(chunk.documentId, [chunk]);
+      }
+    }
+
+    const latestResults: Array<SearchResult | null> = await Promise.all(
+      [...chunksByDocument.entries()]
+        .sort(([leftDocumentId], [rightDocumentId]) => {
+          const leftDocument = documents.get(leftDocumentId);
+          const rightDocument = documents.get(rightDocumentId);
+          return sortDateDescending(leftDocument ? latestSortDate(leftDocument) : null, rightDocument ? latestSortDate(rightDocument) : null);
+        })
+        .slice(0, topK)
+        .map(async ([documentId, documentChunks]) => {
+          const document = documents.get(documentId);
+          const chunk = representativeChunk(documentChunks);
+          if (!chunk || !document) {
+            return null;
+          }
+          return {
+            chunkId: chunk.id,
+            documentId: chunk.documentId,
+            sourceId: chunk.sourceId,
+            sourceType: document.sourceType,
+            score: 0,
+            title: chooseResultTitle(chunk),
+            uri: chunk.uri,
+            headingPath: chunk.headingPath,
+            snippet: await buildSnippetWithAdjacentChunks(chunk, document.title, {
+              document,
+              config,
+              orderedChunkCache
+            }),
+            text: showChunks ? chunk.text : undefined,
+            publicationDate: document.publicationDate ?? null,
+            firstSeenAt: document.firstSeenAt,
+            lastSeenAt: document.lastSeenAt,
+            lastChangedAt: document.lastChangedAt,
+            metadata: chunk.metadata
+          } satisfies SearchResult;
+        })
+    );
+    return { retrievalMode: "lexical", results: latestResults.filter((result): result is SearchResult => result != null) };
+  }
 
   const lexicalHits = async () => {
     const index = await loadHydratedIndex(workspacePath);
-    const all = await index.searchRequest({ query: buildSearchQuery(query, { sourceId, tag, metadata }), limit: candidateLimit });
+    const all = await index.searchRequest({ query: buildSearchQuery(normalizedQuery, { sourceId, sourceIds, sourceType, sourceTypes, tag, tags, metadata }), limit: candidateLimit });
     return all.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit);
   };
 
@@ -358,14 +584,14 @@ export async function searchIndex(
     if (!await fileExists(denseVectorPath(workspacePath))) {
       throw new CliError("dense vector index is not built; run `qli models pull --dense` and `qli rebuild`", "DENSE_INDEX_MISSING", ExitCode.QueryError);
     }
-    return denseQuery({ workspacePath, config: config.retrieval.dense, query, topK: candidateLimit }).then((hits) => hits.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit));
+    return denseQuery({ workspacePath, config: config.retrieval.dense, query: normalizedQuery, topK: candidateLimit }).then((hits) => hits.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit));
   };
 
   const sparseHits = async () => {
     if (!await fileExists(sparseVectorPath(workspacePath))) {
       throw new CliError("sparse vector index is not built; run `qli models pull --sparse` and `qli rebuild`", "SPARSE_INDEX_MISSING", ExitCode.QueryError);
     }
-    return sparseQuery({ workspacePath, config: config.retrieval.sparse, query, topK: candidateLimit }).then((hits) => hits.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit));
+    return sparseQuery({ workspacePath, config: config.retrieval.sparse, query: normalizedQuery, topK: candidateLimit }).then((hits) => hits.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit));
   };
 
   let hits: Array<[string, number]>;
@@ -378,10 +604,10 @@ export async function searchIndex(
   } else {
     const rankings: Array<Array<[string, number]>> = [await lexicalHits()];
     if (await fileExists(denseVectorPath(workspacePath))) {
-      rankings.push(await denseQuery({ workspacePath, config: config.retrieval.dense, query, topK: candidateLimit }).then((dense) => dense.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit)));
+      rankings.push(await denseQuery({ workspacePath, config: config.retrieval.dense, query: normalizedQuery, topK: candidateLimit }).then((dense) => dense.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit)));
     }
     if (await fileExists(sparseVectorPath(workspacePath))) {
-      rankings.push(await sparseQuery({ workspacePath, config: config.retrieval.sparse, query, topK: candidateLimit }).then((sparse) => sparse.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit)));
+      rankings.push(await sparseQuery({ workspacePath, config: config.retrieval.sparse, query: normalizedQuery, topK: candidateLimit }).then((sparse) => sparse.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit)));
     }
     hits = reciprocalRankFusion(rankings, { rankConstant: 20, weights: rankings.map((_, index) => index === 0 ? 3 : 1) }).slice(0, candidateLimit);
   }
@@ -395,16 +621,21 @@ export async function searchIndex(
       chunkId,
       documentId: chunk.documentId,
       sourceId: chunk.sourceId,
+      sourceType: documents.get(chunk.documentId)?.sourceType ?? "text",
       score,
       title: chooseResultTitle(chunk),
       uri: chunk.uri,
       headingPath: chunk.headingPath,
-      snippet: await buildSnippetWithAdjacentChunks(chunk, query, {
+      snippet: await buildSnippetWithAdjacentChunks(chunk, normalizedQuery, {
         document: documents.get(chunk.documentId),
         config,
         orderedChunkCache
       }),
       text: showChunks ? chunk.text : undefined,
+      publicationDate: documents.get(chunk.documentId)?.publicationDate ?? null,
+      firstSeenAt: documents.get(chunk.documentId)?.firstSeenAt ?? chunk.firstSeenAt,
+      lastSeenAt: documents.get(chunk.documentId)?.lastSeenAt ?? chunk.lastSeenAt,
+      lastChangedAt: documents.get(chunk.documentId)?.lastChangedAt ?? chunk.lastChangedAt,
       metadata: chunk.metadata
     } satisfies SearchResult;
   }));
