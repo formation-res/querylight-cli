@@ -102,6 +102,11 @@ function matchesDateRanges(document: DocumentRecord, dateRanges: SearchDateRange
   });
 }
 
+function fallbackSourceType(chunk: ChunkRecord, document: DocumentRecord | undefined, source: Source | undefined): string {
+  const metadataSourceType = typeof chunk.metadata.sourceType === "string" ? chunk.metadata.sourceType : undefined;
+  return document?.sourceType ?? source?.type ?? metadataSourceType ?? "text";
+}
+
 function filterChunk(
   chunk: ChunkRecord,
   document: DocumentRecord | undefined,
@@ -127,22 +132,19 @@ function filterChunk(
   const normalizedSourceTypes = normalizeFilterValues([sourceType, ...(sourceTypes ?? [])].filter((value): value is string => Boolean(value)));
   const normalizedUriPrefixes = normalizeFilterValues([uriPrefix, ...(uriPrefixes ?? [])].filter((value): value is string => Boolean(value)));
   const normalizedTags = normalizeFilterValues([tag, ...(tags ?? [])].filter((value): value is string => Boolean(value)));
-  if (!document) {
-    return false;
-  }
   if (!matchesAny(chunk.sourceId, normalizedSourceIds)) {
     return false;
   }
-  if (!matchesAny(document.sourceType, normalizedSourceTypes)) {
+  if (!matchesAny(fallbackSourceType(chunk, document, source), normalizedSourceTypes)) {
     return false;
   }
   if (normalizedSourceNames.length > 0 && !matchesAny(source?.name ?? "", normalizedSourceNames)) {
     return false;
   }
-  if (!matchesPrefix(document.uri, normalizedUriPrefixes)) {
+  if (!matchesPrefix(document?.uri ?? chunk.uri, normalizedUriPrefixes)) {
     return false;
   }
-  if (hasPublicationDate && !documentDateValue(document, "publicationDate")) {
+  if (hasPublicationDate && (!document || !documentDateValue(document, "publicationDate"))) {
     return false;
   }
   if (normalizedTags.length > 0) {
@@ -160,6 +162,10 @@ function filterChunk(
       return false;
     }
   }
+  if (!document) {
+    return dateRanges.length === 0;
+  }
+
   return matchesDateRanges(document, dateRanges);
 }
 

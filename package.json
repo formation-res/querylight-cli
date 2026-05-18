@@ -2,9 +2,18 @@
   "name": "@formation/querylight-cli",
   "version": "0.1.0",
   "description": "Querylight CLI for building and querying local knowledge bases.",
+  "license": "MIT",
+  "homepage": "https://github.com/formation-res/querylight-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/formation-res/querylight-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/formation-res/querylight-cli/issues"
+  },
   "type": "module",
   "bin": {
-    "qli": "./dist/cli/main.js"
+    "qli": "dist/cli/main.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,12 +27,16 @@
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup src/index.ts src/cli/main.ts --format esm --splitting false --clean && tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "check": "npm run lint && npm test"
+    "check": "npm run lint && npm test",
+    "prepublishOnly": "npm run check && npm run build"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
@@ -31,8 +44,8 @@
     "cheerio": "^1.2.0",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.3",
-    "feedparser": "^2.2.10",
     "fast-glob": "^3.3.3",
+    "feedparser": "^2.2.10",
     "feedsmith": "^2.9.4",
     "gray-matter": "^4.0.3",
     "mammoth": "^1.12.0",

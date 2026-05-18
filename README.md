@@ -1,5 +1,8 @@
 # Querylight CLI
 
+[![CI](https://github.com/formation-res/querylight-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/formation-res/querylight-cli/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/%40formation%2Fquerylight-cli?label=npm)](https://www.npmjs.com/package/@formation/querylight-cli)
+
 `Querylight CLI` is a TypeScript command line application for building and querying local knowledge bases with Querylight TS.
 
 - Package: `@formation/querylight-cli`
@@ -34,6 +37,14 @@ Then run:
 ```bash
 npx qli --help
 ```
+
+## Release
+
+Publish releases from semantic version tags such as `0.1.1`.
+
+The GitHub Actions publish workflow publishes `@formation/querylight-cli` to the public npm registry.
+
+Configure npm trusted publishing for this repository before the first release. The publish workflow uses GitHub OIDC and does not use an `NPM_TOKEN` secret.
 
 ### Local Development with `npm link`
 
