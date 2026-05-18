@@ -3,12 +3,12 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import type { DocumentRecord, Source } from "../../types/models.js";
 import { sha256 } from "../../core/hashing.js";
 import { stableId } from "../../core/ids.js";
-import { withFrontmatter } from "../../normalize/normalize-markdown.js";
 import { extractDocx } from "../extractors/docx-extractor.js";
 import { extractHtmlToMarkdown } from "../extractors/html-extractor.js";
 import { extractMarkdown } from "../extractors/markdown-extractor.js";
 import { extractPdf } from "../extractors/pdf-extractor.js";
 import { extractText } from "../extractors/text-extractor.js";
+import { buildDocumentMetadata, writeNormalizedDocument } from "../document-utils.js";
 
 function mimeTypeFor(filePath: string): string {
   const ext = extname(filePath).toLowerCase();
@@ -55,6 +55,21 @@ async function extractFileContent(filePath: string, mimeType: string): Promise<{
   throw new Error(`unsupported file type: ${mimeType}`);
 }
 
+async function extractRawContent(raw: string, mimeType: string, fallbackTitle: string): Promise<{ title: string; markdown: string }> {
+  if (mimeType === "text/markdown") {
+    const title = raw.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? fallbackTitle;
+    return { title, markdown: raw };
+  }
+  if (mimeType === "text/plain") {
+    return { title: fallbackTitle, markdown: `# ${fallbackTitle}\n\n${raw}` };
+  }
+  if (mimeType === "text/html") {
+    const extracted = extractHtmlToMarkdown(raw);
+    return { title: extracted.title, markdown: `# ${extracted.title}\n\n${extracted.markdown}` };
+  }
+  throw new Error(`raw reprocessing is not supported for ${mimeType}`);
+}
+
 export async function ingestFile(
   {
     workspacePath,
@@ -77,42 +92,56 @@ export async function ingestFile(
   const rawPath = resolve(workspacePath, "raw", source.id, basename(resolved));
   const contentHash = sha256(extracted.markdown);
   const now = new Date().toISOString();
-  const normalized = withFrontmatter(
-    {
-      documentId,
-      sourceId: source.id,
-      title: extracted.title,
-      uri: resolved,
-      contentHash,
-      lastChangedAt: previous?.contentHash === contentHash ? previous.lastChangedAt : now
-    },
-    extracted.markdown
-  );
+  const lastChangedAt = previous?.contentHash === contentHash ? previous.lastChangedAt : now;
+  const indexedAt = now;
+  const crawledAt = now;
   await mkdir(resolve(workspacePath, "normalized"), { recursive: true });
   await mkdir(resolve(workspacePath, "raw", source.id), { recursive: true });
-  await writeFile(normalizedPath, normalized, "utf8");
   if (extracted.raw) {
     await writeFile(rawPath, extracted.raw, "utf8");
   }
+  await writeNormalizedDocument({
+    documentId,
+    sourceId: source.id,
+    title: extracted.title,
+    uri: resolved,
+    sourceUri: source.uri,
+    publicationDate: previous?.publicationDate ?? null,
+    crawledAt,
+    indexedAt,
+    contentHash,
+    lastChangedAt,
+    normalizedPath,
+    markdown: extracted.markdown
+  });
   return {
     id: documentId,
     sourceId: source.id,
     sourceType: source.type,
     title: extracted.title,
     uri: resolved,
+    sourceUri: source.uri,
     mimeType,
     rawPath: extracted.raw ? rawPath : undefined,
     normalizedPath,
     contentHash,
-    metadata: {
-      ...source.metadata,
-      tags: source.tags,
-      contentType: mimeType,
-      fileSizeBytes: fileStat.size
-    },
+    metadata: buildDocumentMetadata({
+      source,
+      sourceUri: source.uri,
+      publicationDate: previous?.publicationDate ?? null,
+      crawledAt,
+      indexedAt,
+      extra: {
+        contentType: mimeType,
+        fileSizeBytes: fileStat.size
+      }
+    }),
+    publicationDate: previous?.publicationDate ?? null,
+    crawledAt,
     firstSeenAt: previous?.firstSeenAt ?? now,
     lastSeenAt: now,
-    lastChangedAt: previous?.contentHash === contentHash ? previous.lastChangedAt : now
+    lastChangedAt,
+    indexedAt
   };
 }
 
@@ -138,27 +167,93 @@ export async function ingestInlineContent(
   const normalizedPath = resolve(workspacePath, "normalized", `${documentId}.md`);
   const contentHash = sha256(markdown);
   const now = new Date().toISOString();
+  const lastChangedAt = previous?.contentHash === contentHash ? previous.lastChangedAt : now;
+  const indexedAt = now;
   await mkdir(resolve(workspacePath, "normalized"), { recursive: true });
-  await writeFile(
+  await writeNormalizedDocument({
+    documentId,
+    sourceId: source.id,
+    title,
+    uri,
+    sourceUri: source.uri,
+    publicationDate: previous?.publicationDate ?? null,
+    crawledAt: now,
+    indexedAt,
+    contentHash,
+    lastChangedAt,
     normalizedPath,
-    withFrontmatter({ documentId, sourceId: source.id, title, uri, contentHash, lastChangedAt: now }, markdown),
-    "utf8"
-  );
+    markdown
+  });
   return {
     id: documentId,
     sourceId: source.id,
     sourceType: source.type,
     title,
     uri,
+    sourceUri: source.uri,
     mimeType: source.type === "markdown" ? "text/markdown" : "text/plain",
     normalizedPath,
     contentHash,
-    metadata: {
-      ...source.metadata,
-      tags: source.tags
-    },
+    metadata: buildDocumentMetadata({
+      source,
+      sourceUri: source.uri,
+      publicationDate: previous?.publicationDate ?? null,
+      crawledAt: now,
+      indexedAt
+    }),
+    publicationDate: previous?.publicationDate ?? null,
+    crawledAt: now,
     firstSeenAt: previous?.firstSeenAt ?? now,
     lastSeenAt: now,
-    lastChangedAt: previous?.contentHash === contentHash ? previous.lastChangedAt : now
+    lastChangedAt,
+    indexedAt
+  };
+}
+
+export async function reprocessStoredDocument(
+  document: DocumentRecord,
+  source: Source
+): Promise<DocumentRecord | null> {
+  if (!document.rawPath) {
+    return null;
+  }
+  const raw = await readFile(document.rawPath, "utf8");
+  const fallbackTitle = document.title || basename(document.uri);
+  const extracted = await extractRawContent(raw, document.mimeType, fallbackTitle);
+  const contentHash = sha256(extracted.markdown);
+  const now = new Date().toISOString();
+  const indexedAt = now;
+  const lastChangedAt = document.contentHash === contentHash ? document.lastChangedAt : now;
+  await writeNormalizedDocument({
+    documentId: document.id,
+    sourceId: document.sourceId,
+    title: extracted.title,
+    uri: document.uri,
+    sourceUri: document.sourceUri,
+    publicationDate: document.publicationDate ?? null,
+    crawledAt: document.crawledAt,
+    indexedAt,
+    contentHash,
+    lastChangedAt,
+    normalizedPath: document.normalizedPath,
+    markdown: extracted.markdown
+  });
+  return {
+    ...document,
+    title: extracted.title,
+    contentHash,
+    metadata: buildDocumentMetadata({
+      source,
+      sourceUri: document.sourceUri,
+      publicationDate: document.publicationDate ?? null,
+      crawledAt: document.crawledAt,
+      indexedAt,
+      extra: {
+        ...document.metadata,
+        contentType: document.mimeType
+      }
+    }),
+    lastChangedAt,
+    indexedAt
   };
 }

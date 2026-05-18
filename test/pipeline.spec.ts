@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chunkDocuments } from "../src/chunk/chunker.js";
+import { buildChunksForDocument } from "../src/chunk/chunker.js";
 import { loadChunks } from "../src/chunk/chunk-store.js";
 import { ensureWorkspace } from "../src/core/workspace.js";
+import { loadConfig } from "../src/core/config.js";
 import { buildIndex } from "../src/index/querylight-indexer.js";
 import { ingestSources } from "../src/ingest/ingest-service.js";
 import { createContext } from "../src/query/context-builder.js";
@@ -191,5 +193,32 @@ describe("pipeline behavior", () => {
     const body = await readFile(path.join(normalizedDir, authFile!), "utf8");
     expect(body).toContain("documentId:");
     expect(body).toContain("sourceId:");
+  });
+
+  it("does not explode chunk counts when a long section ends near the overlap boundary", async () => {
+    const root = await tempWorkspace();
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const config = await loadConfig(workspacePath);
+    const repeated = "A".repeat(1200);
+    const markdown = `# Title\n\n${repeated}\n\nshort tail\n\n${"B".repeat(1200)}`;
+    const document = {
+      id: "doc1",
+      sourceId: "src1",
+      sourceType: "markdown" as const,
+      title: "Title",
+      uri: "inline:doc1",
+      sourceUri: "inline:doc1",
+      mimeType: "text/markdown",
+      normalizedPath: "unused",
+      contentHash: "hash",
+      metadata: {},
+      firstSeenAt: "2026-05-18T00:00:00.000Z",
+      lastSeenAt: "2026-05-18T00:00:00.000Z",
+      lastChangedAt: "2026-05-18T00:00:00.000Z"
+    };
+
+    const chunks = buildChunksForDocument(document, markdown, config);
+    expect(chunks.length).toBeLessThan(10);
+    expect(Math.min(...chunks.map((chunk) => chunk.text.length))).toBeGreaterThan(20);
   });
 });

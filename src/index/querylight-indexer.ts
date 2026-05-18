@@ -31,6 +31,9 @@ export function createIndexMapping(extraFields: string[] = []): Record<string, T
 function flattenMetadata(metadata: Record<string, unknown>): Record<string, string[]> {
   const flattened: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(metadata)) {
+    if (value == null) {
+      continue;
+    }
     const field = `metadata.${key}`;
     if (Array.isArray(value)) {
       flattened[field] = value.map((item) => String(item).toLowerCase());

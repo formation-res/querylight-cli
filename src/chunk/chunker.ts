@@ -49,14 +49,26 @@ function splitLongSection(text: string, maxChars: number, overlapChars: number):
   const chunks: string[] = [];
   let start = 0;
   while (start < text.length) {
-    const end = Math.min(text.length, start + maxChars);
-    let slice = text.slice(start, end);
-    const paragraphBreak = slice.lastIndexOf("\n\n");
-    if (paragraphBreak > maxChars / 2 && end < text.length) {
-      slice = slice.slice(0, paragraphBreak);
+    const hardEnd = Math.min(text.length, start + maxChars);
+    let sliceEnd = hardEnd;
+    const window = text.slice(start, hardEnd);
+    const paragraphBreak = window.lastIndexOf("\n\n");
+    if (paragraphBreak > maxChars / 2 && hardEnd < text.length) {
+      const candidateEnd = start + paragraphBreak;
+      // Ignore paragraph breaks that would create a chunk smaller than the overlap,
+      // otherwise we can degrade into 1-char forward progress and explode chunk counts.
+      if (candidateEnd - start > overlapChars) {
+        sliceEnd = candidateEnd;
+      }
     }
-    chunks.push(slice.trim());
-    start += Math.max(1, slice.length - overlapChars);
+    const slice = text.slice(start, sliceEnd).trim();
+    if (slice.length === 0) {
+      start = hardEnd;
+      continue;
+    }
+    chunks.push(slice);
+    const nextStart = sliceEnd - overlapChars;
+    start = nextStart > start ? nextStart : hardEnd;
   }
   return chunks.filter((chunk) => chunk.length > 0);
 }

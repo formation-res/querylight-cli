@@ -1,12 +1,13 @@
 export type SourceType =
   | "url"
   | "website"
+  | "rss"
   | "file"
   | "directory"
   | "markdown"
   | "text";
 
-export type PrimitiveMetadata = string | number | boolean | string[];
+export type PrimitiveMetadata = string | number | boolean | string[] | null;
 export type Metadata = Record<string, PrimitiveMetadata>;
 export type RetrievalMode = "lexical" | "dense" | "sparse" | "hybrid";
 
@@ -20,6 +21,17 @@ export type CrawlConfig = {
   rateLimitMs?: number;
   useSitemap?: boolean;
   renderJs?: boolean;
+  retentionDays?: number;
+  fetchArticles?: boolean;
+};
+
+export type HttpCacheMetadata = {
+  etag?: string;
+  lastModified?: string;
+  cacheControl?: string;
+  expires?: string | null;
+  lastValidatedAt?: string;
+  lastStatus?: number;
 };
 
 export type Source = {
@@ -41,6 +53,7 @@ export type DocumentRecord = {
   sourceType: SourceType;
   title: string;
   uri: string;
+  sourceUri: string;
   canonicalUri?: string;
   mimeType: string;
   language?: string;
@@ -48,10 +61,13 @@ export type DocumentRecord = {
   normalizedPath: string;
   contentHash: string;
   metadata: Metadata;
+  publicationDate?: string | null;
+  crawledAt?: string;
   firstSeenAt: string;
   lastSeenAt: string;
   lastChangedAt: string;
   indexedAt?: string;
+  httpCache?: HttpCacheMetadata;
 };
 
 export type ChunkRecord = {
@@ -186,6 +202,8 @@ export type WorkspaceConfig = {
     obeyRobotsTxt: boolean;
     rateLimitMs: number;
     renderJs: boolean;
+    retentionDays: number;
+    fetchArticles: boolean;
   };
   limits: {
     maxFileSizeMb: number;

@@ -51,7 +51,9 @@ export const defaultConfig = (): WorkspaceConfig => ({
     defaultUserAgent: "querylight-cli/0.1",
     obeyRobotsTxt: true,
     rateLimitMs: 1000,
-    renderJs: false
+    renderJs: false,
+    retentionDays: 365,
+    fetchArticles: true
   },
   limits: {
     maxFileSizeMb: 50,

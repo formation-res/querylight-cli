@@ -178,4 +178,5 @@ describe("vector helpers and retrieval", () => {
     expect(context.retrievalMode).toBe("hybrid");
     expect(context.markdown).toContain("Chunk ID:");
   });
+
 });

@@ -52,3 +52,68 @@ export function extractHtmlToMarkdown(html: string): { markdown: string; title: 
     title
   };
 }
+
+function parseDateCandidate(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const date = new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function extractPublicationDateFromHtml(html: string): string | null {
+  const $ = load(html);
+  const candidates = [
+    $("meta[property='article:published_time']").attr("content"),
+    $("meta[property='og:published_time']").attr("content"),
+    $("meta[name='pubdate']").attr("content"),
+    $("meta[name='publish-date']").attr("content"),
+    $("meta[name='article:published_time']").attr("content"),
+    $("meta[name='date']").attr("content"),
+    $("time[datetime]").first().attr("datetime")
+  ].filter((value): value is string => Boolean(value?.trim()));
+
+  for (const candidate of candidates) {
+    const parsed = parseDateCandidate(candidate);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  let jsonLdDate: string | null = null;
+  $('script[type="application/ld+json"]').each((_, element) => {
+    if (jsonLdDate) {
+      return false;
+    }
+    try {
+      const raw = $(element).text();
+      const parsed = JSON.parse(raw) as unknown;
+      const queue = Array.isArray(parsed) ? [...parsed] : [parsed];
+      while (queue.length > 0) {
+        const next = queue.shift();
+        if (!next || typeof next !== "object") {
+          continue;
+        }
+        const record = next as Record<string, unknown>;
+        for (const key of ["datePublished", "dateCreated", "dateModified"]) {
+          if (typeof record[key] === "string") {
+            const normalized = parseDateCandidate(record[key]);
+            if (normalized) {
+              jsonLdDate = normalized;
+              return false;
+            }
+          }
+        }
+        if (Array.isArray(record["@graph"])) {
+          queue.push(...record["@graph"]);
+        }
+      }
+    } catch (error) {
+      void error;
+    }
+    return undefined;
+  });
+
+  return jsonLdDate;
+}

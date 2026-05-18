@@ -31,7 +31,9 @@
     "cheerio": "^1.2.0",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.3",
+    "feedparser": "^2.2.10",
     "fast-glob": "^3.3.3",
+    "feedsmith": "^2.9.4",
     "gray-matter": "^4.0.3",
     "mammoth": "^1.12.0",
     "pdf-parse": "^2.4.5",
@@ -40,6 +42,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@types/feedparser": "^2.2.8",
     "@types/node": "^25.8.0",
     "@types/pdf-parse": "^1.1.5",
     "@types/turndown": "^5.0.6",

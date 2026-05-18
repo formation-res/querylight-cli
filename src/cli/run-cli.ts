@@ -7,7 +7,7 @@ import { loadConfig } from "../core/config.js";
 import { CliError, ExitCode } from "../core/errors.js";
 import { assertWorkspaceExists, ensureWorkspace } from "../core/workspace.js";
 import { buildIndex } from "../index/querylight-indexer.js";
-import { ingestSources } from "../ingest/ingest-service.js";
+import { ingestSources, reprocessDocuments } from "../ingest/ingest-service.js";
 import { searchIndex } from "../query/search-service.js";
 import { createContext } from "../query/context-builder.js";
 import { diffWorkspace, renderChangeReport } from "../report/diff-service.js";
@@ -25,7 +25,7 @@ type IoCapture = {
   stderr: string[];
 };
 
-const SOURCE_TYPES = new Set<SourceType>(["url", "website", "file", "directory", "markdown", "text"]);
+const SOURCE_TYPES = new Set<SourceType>(["url", "website", "rss", "file", "directory", "markdown", "text"]);
 const RETRIEVAL_MODES = new Set<RetrievalMode>(["lexical", "dense", "sparse", "hybrid"]);
 
 function parseKeyValue(input: string): [string, string] {
@@ -112,6 +112,7 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
     .option("--render-js")
     .option("--no-robots")
     .option("--rate-limit-ms <n>")
+    .option("--retention-days <n>")
     .action(async function command(type: SourceType, uri: string, options) {
       if (!SOURCE_TYPES.has(type)) {
         throw new CliError(`unsupported source type: ${type}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
@@ -119,7 +120,7 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
       const now = new Date().toISOString();
-      const crawl: CrawlConfig | undefined = ["url", "website", "directory"].includes(type)
+      const crawl: CrawlConfig | undefined = ["url", "website", "directory", "rss"].includes(type)
         ? {
             maxDepth: options.maxDepth ? Number(options.maxDepth) : undefined,
             maxPages: options.maxPages ? Number(options.maxPages) : undefined,
@@ -128,7 +129,9 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
             obeyRobotsTxt: options.robots,
             rateLimitMs: options.rateLimitMs ? Number(options.rateLimitMs) : undefined,
             renderJs: Boolean(options.renderJs),
-            useSitemap: true
+            useSitemap: type === "website" ? true : undefined,
+            retentionDays: options.retentionDays ? Number(options.retentionDays) : undefined,
+            fetchArticles: type === "rss" ? true : undefined
           }
         : undefined;
       const stored = await addSource(workspace, {
@@ -191,6 +194,16 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
       const workspace = await resolveWorkspace({ workspace: global.workspace });
       const result = await chunkDocuments({ workspacePath: workspace, sourceId: options.source, documentId: options.document });
       emit(global.json, capture, response("chunk", workspace, result), `Wrote ${result.chunksWritten} chunks`);
+    });
+
+  program.command("reprocess")
+    .option("--source <sourceId>")
+    .option("--document <documentId>")
+    .action(async function command(options) {
+      const global = this.optsWithGlobals();
+      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const result = await reprocessDocuments({ workspacePath: workspace, sourceId: options.source, documentId: options.document });
+      emit(global.json, capture, response("reprocess", workspace, result), `Reprocessed ${result.documentsReprocessed} documents`);
     });
 
   const index = program.command("index");
