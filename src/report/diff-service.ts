@@ -8,7 +8,7 @@ function chooseBaselineRun(runs: RunRecord[], since?: string): RunRecord | undef
     return runs.at(-1);
   }
   if (since) {
-    return runs.filter((run) => run.createdAt >= since).at(0) ?? runs.at(-1);
+    return runs.filter((run) => run.createdAt < since).at(-1) ?? runs.at(-1);
   }
   return runs.at(-1);
 }

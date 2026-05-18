@@ -54,6 +54,28 @@ describe("pipeline behavior", () => {
     expect(third.documents.unchanged).toBe(2);
   });
 
+  it("detects actual changes when ingesting with changed-only", async () => {
+    const root = await tempWorkspace();
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const source = await addSource(workspacePath, {
+      type: "directory",
+      uri: docsDir,
+      name: "Docs",
+      enabled: true,
+      tags: ["docs"],
+      metadata: { team: "platform" },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    await ingestSources({ workspacePath, sourceIds: [source.id] });
+    await writeFile(path.join(docsDir, "auth.md"), "# API Authentication\n\nUse mutual TLS.\n", "utf8");
+
+    const result = await ingestSources({ workspacePath, sourceIds: [source.id], changedOnly: true });
+    expect(result.documents.changed).toBe(1);
+    expect(result.documents.unchanged).toBe(2);
+  });
+
   it("keeps unrelated chunks when chunking only one source", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });

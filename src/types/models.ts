@@ -167,6 +167,11 @@ export type RunRecord = {
   createdAt: string;
   success: boolean;
   summary: Record<string, unknown>;
+  failures?: Array<{
+    sourceId: string;
+    uri: string;
+    message: string;
+  }>;
   documentsSnapshot?: Array<{
     id: string;
     title: string;

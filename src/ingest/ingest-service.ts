@@ -48,16 +48,13 @@ export async function ingestSources(
   let changed = 0;
   let unchanged = 0;
   let failed = 0;
+  const failures: Array<{ sourceId: string; uri: string; message: string }> = [];
 
   for (const source of sources) {
     const ingestOne = async (uri: string, producer: () => Promise<DocumentRecord>): Promise<void> => {
       try {
         const probeId = stableId("doc", source.id, uri);
         const earlier = previous.get(probeId);
-        if (changedOnly && earlier) {
-          unchanged += 1;
-          return;
-        }
         const document = await producer();
         nextDocuments.set(document.id, document);
         if (!earlier) {
@@ -67,8 +64,13 @@ export async function ingestSources(
         } else {
           unchanged += 1;
         }
-      } catch {
+      } catch (error) {
         failed += 1;
+        failures.push({
+          sourceId: source.id,
+          uri,
+          message: error instanceof Error ? error.message : String(error)
+        });
       }
     };
 
@@ -117,8 +119,10 @@ export async function ingestSources(
       added,
       changed,
       unchanged,
-      failed
+      failed,
+      changedOnly
     },
+    failures,
     documentsSnapshot: finalDocuments.map((document) => ({
       id: document.id,
       title: document.title,

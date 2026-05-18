@@ -5,7 +5,7 @@ import { chunkDocuments } from "../chunk/chunker.js";
 import { DEFAULT_WORKSPACE, PACKAGE_VERSION } from "../core/constants.js";
 import { loadConfig } from "../core/config.js";
 import { CliError, ExitCode } from "../core/errors.js";
-import { ensureWorkspace } from "../core/workspace.js";
+import { assertWorkspaceExists, ensureWorkspace } from "../core/workspace.js";
 import { buildIndex } from "../index/querylight-indexer.js";
 import { ingestSources } from "../ingest/ingest-service.js";
 import { searchIndex } from "../query/search-service.js";
@@ -22,6 +22,8 @@ type IoCapture = {
   stdout: string[];
   stderr: string[];
 };
+
+const SOURCE_TYPES = new Set<SourceType>(["url", "website", "file", "directory", "markdown", "text"]);
 
 function parseKeyValue(input: string): [string, string] {
   const idx = input.indexOf("=");
@@ -90,6 +92,9 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
     .option("--no-robots")
     .option("--rate-limit-ms <n>")
     .action(async function command(type: SourceType, uri: string, options) {
+      if (!SOURCE_TYPES.has(type)) {
+        throw new CliError(`unsupported source type: ${type}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+      }
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
       const now = new Date().toISOString();
@@ -282,9 +287,8 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
 
   program.command("doctor").action(async function command() {
     const global = this.optsWithGlobals();
-    const workspace = await resolveWorkspace({ workspace: global.workspace });
+    const workspace = await assertWorkspaceExists(await resolveWorkspace({ workspace: global.workspace }));
     const checks: string[] = [];
-    await ensureWorkspace({ workspacePath: workspace });
     await loadConfig(workspace, global.config);
     checks.push("workspace exists");
     checks.push("config parses");

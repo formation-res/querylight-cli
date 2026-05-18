@@ -17,7 +17,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsup src/index.ts src/cli/main.ts --format esm --dts --splitting false --clean",
+    "build": "tsup src/index.ts src/cli/main.ts --format esm --splitting false --clean && tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
@@ -25,23 +25,23 @@
   },
   "dependencies": {
     "@tryformation/querylight-ts": "^0.10.0",
-    "cheerio": "^1.1.2",
+    "cheerio": "^1.2.0",
     "cli-table3": "^0.6.5",
-    "commander": "^14.0.2",
+    "commander": "^14.0.3",
     "fast-glob": "^3.3.3",
     "gray-matter": "^4.0.3",
-    "mammoth": "^1.11.0",
-    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
     "picocolors": "^1.1.1",
-    "turndown": "^7.2.1",
-    "yaml": "^2.8.1"
+    "turndown": "^7.2.4",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@types/node": "^25.8.0",
     "@types/pdf-parse": "^1.1.5",
-    "@types/node": "^24.10.1",
     "@types/turndown": "^5.0.6",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   }
 }
