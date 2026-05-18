@@ -26,6 +26,8 @@ Run without installing globally:
 bunx @tryformation/querylight-cli init
 ```
 
+For agent and Python automation examples that use `bunx` and `uv`, see [`examples/skills/qli-bunx-uv/SKILL.md`](https://github.com/formation-res/querylight-cli/blob/main/examples/skills/qli-bunx-uv/SKILL.md).
+
 Install as a dependency:
 
 ```bash
@@ -36,6 +38,12 @@ Then run:
 
 ```bash
 npx qli --help
+```
+
+If you prefer to avoid a local install, use:
+
+```bash
+bunx @tryformation/querylight-cli --help
 ```
 
 ## Release
@@ -108,6 +116,18 @@ Generate retrieval context:
 ```bash
 qli context "How do I authenticate API requests?" --top-k 8
 ```
+
+## Example Skill: `qli` with `bunx` and `uv`
+
+The repository includes an example skill for running `qli` without a global install and calling it from Python with `uv`:
+
+- [`examples/skills/qli-bunx-uv/SKILL.md`](https://github.com/formation-res/querylight-cli/blob/main/examples/skills/qli-bunx-uv/SKILL.md)
+
+It covers:
+
+- running `qli` with `bunx @tryformation/querylight-cli`
+- using `--json` for automation and agents
+- calling `qli search` and `qli context` from Python with `subprocess`
 
 ## Example: Index `querylight.tryformation.com`
 
