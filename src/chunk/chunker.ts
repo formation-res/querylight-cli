@@ -5,7 +5,7 @@ import { loadConfig } from "../core/config.js";
 import { sha256 } from "../core/hashing.js";
 import { stableId } from "../core/ids.js";
 import { readJsonl } from "../core/jsonl.js";
-import type { ChunkRecord, DocumentRecord } from "../types/models.js";
+import type { ChunkRecord, DocumentRecord, WorkspaceConfig } from "../types/models.js";
 import { loadChunks, saveChunks } from "./chunk-store.js";
 
 type Section = {
@@ -65,6 +65,49 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+export function buildChunksForDocument(
+  document: DocumentRecord,
+  markdown: string,
+  config: WorkspaceConfig,
+  prior = new Map<string, ChunkRecord>(),
+  seenAt = new Date().toISOString()
+): ChunkRecord[] {
+  const parsed = matter(markdown);
+  const sections = splitSections(parsed.content);
+  const usefulSections = sections.length > 0 ? sections : [{ headingPath: [document.title], text: parsed.content }];
+  const chunks: ChunkRecord[] = [];
+
+  for (const section of usefulSections) {
+    const pieces = splitLongSection(section.text, config.index.chunking.maxChars, config.index.chunking.overlapChars);
+    for (const piece of pieces) {
+      if (piece.trim().length < Math.min(40, config.index.chunking.minChars) && pieces.length === 1) {
+        continue;
+      }
+      const text = piece.trim();
+      const id = stableId("chunk", document.id, section.headingPath.join(" > "), text);
+      const priorChunk = prior.get(id);
+      const contentHash = sha256(text);
+      chunks.push({
+        id,
+        documentId: document.id,
+        sourceId: document.sourceId,
+        title: document.title,
+        uri: document.uri,
+        headingPath: section.headingPath,
+        text,
+        tokenEstimate: estimateTokens(text),
+        contentHash,
+        metadata: document.metadata,
+        firstSeenAt: priorChunk?.firstSeenAt ?? document.firstSeenAt,
+        lastSeenAt: seenAt,
+        lastChangedAt: priorChunk?.contentHash === contentHash ? priorChunk.lastChangedAt : document.lastChangedAt
+      });
+    }
+  }
+
+  return chunks;
+}
+
 export async function chunkDocuments(
   {
     workspacePath,
@@ -90,34 +133,8 @@ export async function chunkDocuments(
 
   for (const document of filtered) {
     const raw = await readFile(document.normalizedPath, "utf8");
-    const parsed = matter(raw);
-    const sections = splitSections(parsed.content);
-    const usefulSections = sections.length > 0 ? sections : [{ headingPath: [document.title], text: parsed.content }];
-    for (const section of usefulSections) {
-      const pieces = splitLongSection(section.text, config.index.chunking.maxChars, config.index.chunking.overlapChars);
-      for (const piece of pieces) {
-        if (piece.trim().length < Math.min(40, config.index.chunking.minChars) && pieces.length === 1) {
-          continue;
-        }
-        const id = stableId("chunk", document.id, section.headingPath.join(" > "), piece.trim());
-        const priorChunk = prior.get(id);
-        const text = piece.trim();
-        nextChunks.set(id, {
-          id,
-          documentId: document.id,
-          sourceId: document.sourceId,
-          title: document.title,
-          uri: document.uri,
-          headingPath: section.headingPath,
-          text,
-          tokenEstimate: estimateTokens(text),
-          contentHash: sha256(text),
-          metadata: document.metadata,
-          firstSeenAt: priorChunk?.firstSeenAt ?? document.firstSeenAt,
-          lastSeenAt: new Date().toISOString(),
-          lastChangedAt: priorChunk?.contentHash === sha256(text) ? priorChunk.lastChangedAt : document.lastChangedAt
-        });
-      }
+    for (const chunk of buildChunksForDocument(document, raw, config, prior)) {
+      nextChunks.set(chunk.id, chunk);
     }
   }
 

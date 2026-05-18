@@ -136,6 +136,65 @@ describe("ingest, chunk, index, query", () => {
     expect(build.metadata.indexHash.length).toBeGreaterThan(10);
   });
 
+  it("prefers a specific article page over an aggregate page when both match", async () => {
+    const root = await tempWorkspace();
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
+      {
+        id: "chunk-aggregate",
+        documentId: "doc-aggregate",
+        sourceId: "src1",
+        title: "BoostingQuery for Soft Demotion Instead of Hard Exclusion",
+        uri: "https://querylight.tryformation.com/docs/",
+        headingPath: ["Docs", "Static article pages", "BoostingQuery for Soft Demotion Instead of Hard Exclusion"],
+        text: "BoostingQuery for Soft Demotion Instead of Hard Exclusion helps push down undesirable candidates in search results.",
+        tokenEstimate: 20,
+        contentHash: "hash-aggregate",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "chunk-detail-1",
+        documentId: "doc-detail",
+        sourceId: "src1",
+        title: "BoostingQuery for Soft Demotion Instead of Hard Exclusion",
+        uri: "https://querylight.tryformation.com/docs/lexical-querying/boosting-query/",
+        headingPath: ["BoostingQuery for Soft Demotion Instead of Hard Exclusion"],
+        text: "BoostingQuery explains soft demotion and how to keep relevant documents while lowering undesirable results.",
+        tokenEstimate: 22,
+        contentHash: "hash-detail-1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "chunk-detail-2",
+        documentId: "doc-detail",
+        sourceId: "src1",
+        title: "BoostingQuery for Soft Demotion Instead of Hard Exclusion",
+        uri: "https://querylight.tryformation.com/docs/lexical-querying/boosting-query/",
+        headingPath: ["BoostingQuery for Soft Demotion Instead of Hard Exclusion", "Why use it"],
+        text: "Use BoostingQuery when you want soft demotion instead of hard exclusion for weak or undesirable matches.",
+        tokenEstimate: 20,
+        contentHash: "hash-detail-2",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    await buildIndex({ workspacePath });
+
+    const search = await searchIndex({ workspacePath, query: "boostingquery soft demotion undesirable results", topK: 5 });
+    expect(search.results[0]?.documentId).toBe("doc-detail");
+    expect(search.results[0]?.uri).toBe("https://querylight.tryformation.com/docs/lexical-querying/boosting-query/");
+    expect(search.results.some((result) => result.documentId === "doc-aggregate" && result.title === "BoostingQuery for Soft Demotion Instead of Hard Exclusion")).toBe(false);
+  });
+
   it("reports changed documents and markdown change reports", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
