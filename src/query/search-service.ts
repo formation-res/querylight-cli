@@ -36,12 +36,42 @@ function buildSearchQuery(
 }
 
 function buildSnippet(text: string, query: string): string {
-  const lower = text.toLowerCase();
+  const plain = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const lower = plain.toLowerCase();
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   const index = terms.map((term) => lower.indexOf(term)).find((value) => value != null && value >= 0) ?? 0;
   const start = Math.max(0, index - 40);
-  const end = Math.min(text.length, start + 200);
-  return text.slice(start, end).replace(/\s+/g, " ").trim();
+  const end = Math.min(plain.length, start + 200);
+  return plain.slice(start, end).trim();
+}
+
+function normalizeDisplayTitle(title: string): string {
+  return title
+    .replace(/\s*\|\s*Querylight TS Demo\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function chooseResultTitle(chunk: ChunkRecord): string {
+  const documentTitle = normalizeDisplayTitle(chunk.title);
+  const headings = chunk.headingPath.map((heading) => normalizeDisplayTitle(heading)).filter(Boolean);
+  const leafHeading = headings.at(-1);
+
+  if (leafHeading && leafHeading.toLowerCase() !== documentTitle.toLowerCase()) {
+    return leafHeading;
+  }
+  if (documentTitle) {
+    return documentTitle;
+  }
+  return leafHeading ?? "Untitled";
 }
 
 export async function searchIndex(
@@ -123,7 +153,7 @@ export async function searchIndex(
       documentId: chunk.documentId,
       sourceId: chunk.sourceId,
       score,
-      title: chunk.title,
+      title: chooseResultTitle(chunk),
       uri: chunk.uri,
       headingPath: chunk.headingPath,
       snippet: buildSnippet(chunk.text, query),

@@ -43,6 +43,26 @@ describe("normalization", () => {
     expect(extracted.markdown).toContain("Hello world");
   });
 
+  it("normalizes doc-card anchors into readable markdown", () => {
+    const html = `
+      <main>
+        <h1>Documentation</h1>
+        <a class="doc-card" href="/docs/ranking/tfidf-and-bm25-ranking/">
+          <span>Ranking</span>
+          <h3>TF-IDF and BM25 Ranking</h3>
+          <p>Choose between classic term weighting and Lucene-style BM25 scoring.</p>
+        </a>
+      </main>
+    `;
+
+    const extracted = extractHtmlToMarkdown(html);
+    expect(extracted.markdown).toContain("### TF-IDF and BM25 Ranking");
+    expect(extracted.markdown).toContain("Choose between classic term weighting");
+    expect(extracted.markdown).toContain("Ranking");
+    expect(extracted.markdown).toContain("/docs/ranking/tfidf-and-bm25-ranking/");
+    expect(extracted.markdown).not.toContain("](/docs/ranking");
+  });
+
   it("normalizes whitespace and writes frontmatter", () => {
     const normalized = normalizeWhitespace("a  \n\n\nb\n");
     expect(normalized).toBe("a\n\nb");
