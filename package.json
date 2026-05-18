@@ -1,0 +1,47 @@
+{
+  "name": "@formation/querylight-cli",
+  "version": "0.1.0",
+  "description": "Querylight CLI for building and querying local knowledge bases.",
+  "type": "module",
+  "bin": {
+    "qli": "./dist/cli/main.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "Dockerfile",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/cli/main.ts --format esm --dts --splitting false --clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "check": "npm run lint && npm test"
+  },
+  "dependencies": {
+    "@tryformation/querylight-ts": "^0.10.0",
+    "cheerio": "^1.1.2",
+    "cli-table3": "^0.6.5",
+    "commander": "^14.0.2",
+    "fast-glob": "^3.3.3",
+    "gray-matter": "^4.0.3",
+    "mammoth": "^1.11.0",
+    "pdf-parse": "^1.1.1",
+    "picocolors": "^1.1.1",
+    "turndown": "^7.2.1",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/pdf-parse": "^1.1.5",
+    "@types/node": "^24.10.1",
+    "@types/turndown": "^5.0.6",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  }
+}

@@ -1,0 +1,52 @@
+import type { ContextResponseData, ContextSource } from "../types/models.js";
+import { searchIndex } from "./search-service.js";
+
+export async function createContext(
+  {
+    workspacePath,
+    query,
+    topK,
+    maxChars
+  }: {
+    workspacePath: string;
+    query: string;
+    topK: number;
+    maxChars: number;
+  }
+): Promise<ContextResponseData> {
+  const search = await searchIndex({ workspacePath, query, topK, showChunks: true });
+  const sources: ContextSource[] = [];
+  let total = 0;
+  for (const result of search.results) {
+    const text = result.text ?? "";
+    if (total + text.length > maxChars && sources.length > 0) {
+      break;
+    }
+    total += text.length;
+    sources.push({
+      chunkId: result.chunkId,
+      documentId: result.documentId,
+      sourceId: result.sourceId,
+      title: result.title,
+      uri: result.uri,
+      headingPath: result.headingPath,
+      text,
+      metadata: result.metadata
+    });
+  }
+  const markdown = [
+    "# Context",
+    "",
+    ...sources.flatMap((source, index) => [
+      `## Source ${index + 1}`,
+      `Title: ${source.title}`,
+      `URL: ${source.uri}`,
+      `Chunk ID: ${source.chunkId}`,
+      source.headingPath.length > 0 ? `Heading Path: ${source.headingPath.join(" > ")}` : "",
+      "",
+      source.text,
+      ""
+    ].filter((line) => line !== ""))
+  ].join("\n");
+  return { markdown, sources };
+}
