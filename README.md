@@ -234,12 +234,15 @@ qli source add file ./docs/guide.md --name "Guide"
 qli source add directory ./docs --name "Docs" --tag docs
 qli source add url https://example.com/docs/auth --name "Auth Page"
 qli source add website https://example.com --name "Example Site" --max-depth 2 --max-pages 50
+qli source add rss https://example.com/feed.xml --name "Release Feed"
 ```
 
 List and manage them:
 
 ```bash
 qli source list
+qli source config <source-id> --retention-days 30
+qli source config <source-id> --name "Docs Feed" --tag rss docs
 qli source disable <source-id>
 qli source enable <source-id>
 qli source remove <source-id>

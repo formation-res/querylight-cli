@@ -1,5 +1,6 @@
 import path from "node:path";
 import { loadChunks, saveChunks } from "../chunk/chunk-store.js";
+import { loadConfig } from "../core/config.js";
 import { fileExists } from "../core/files.js";
 import { stableId } from "../core/ids.js";
 import { readJsonl, writeJsonl } from "../core/jsonl.js";
@@ -48,11 +49,11 @@ function documentSnapshot(documents: DocumentRecord[]): RunRecord["documentsSnap
   }));
 }
 
-function shouldExpireRssDocument(document: DocumentRecord, source: Source): boolean {
+function shouldExpireRssDocument(document: DocumentRecord, source: Source, defaultRetentionDays: number): boolean {
   if (source.type !== "rss" || !document.publicationDate) {
     return false;
   }
-  const retentionDays = source.crawl?.retentionDays ?? 365;
+  const retentionDays = source.crawl?.retentionDays ?? defaultRetentionDays;
   const publishedAt = new Date(document.publicationDate);
   if (Number.isNaN(publishedAt.getTime())) {
     return false;
@@ -166,6 +167,8 @@ export async function ingestSources(
   documents: { added: number; changed: number; unchanged: number; failed: number };
   processedSources: number;
 }> {
+  const config = await loadConfig(workspacePath);
+  const defaultRetentionDays = config.crawler.retentionDays;
   const sources = (await listSources(workspacePath)).filter((source) => source.enabled && (!sourceIds || sourceIds.includes(source.id)));
   const existing = await loadDocuments(workspacePath);
   const previous = previousMap(existing);
@@ -263,7 +266,7 @@ export async function ingestSources(
 
   const expiringDocuments = [...nextDocuments.values()].filter((document) => {
     const source = sources.find((candidate) => candidate.id === document.sourceId);
-    return source ? shouldExpireRssDocument(document, source) : false;
+    return source ? shouldExpireRssDocument(document, source, defaultRetentionDays) : false;
   });
   if (expiringDocuments.length > 0) {
     const expiredIds = new Set(expiringDocuments.map((document) => document.id));

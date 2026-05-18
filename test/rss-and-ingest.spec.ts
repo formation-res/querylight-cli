@@ -244,4 +244,73 @@ describe("rss parsing and retention", () => {
     await expect(stat(rawPath)).rejects.toThrow();
     await expect(stat(normalizedPath)).rejects.toThrow();
   });
+
+  it("falls back to workspace retention for existing rss sources without a stored override", async () => {
+    const root = await tempWorkspace("qli-rss-retention-config-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "crawler:\n  retentionDays: 30\n", "utf8");
+    const source = await addSource(workspacePath, {
+      type: "rss",
+      uri: "https://example.com/feed.xml",
+      name: "Feed",
+      enabled: true,
+      tags: ["news"],
+      metadata: {},
+      crawl: { fetchArticles: true },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    const expiredUrl = "https://example.com/old";
+    const expiredId = stableId("doc", source.id, expiredUrl);
+    const rawPath = path.join(workspacePath, "raw", source.id, "old.html");
+    const normalizedPath = path.join(workspacePath, "normalized", `${expiredId}.md`);
+    await mkdir(path.dirname(rawPath), { recursive: true });
+    await writeFile(rawPath, htmlPage("Old", "Old body", "2026-03-01T00:00:00Z"), "utf8");
+    await writeFile(normalizedPath, "# Old\n\nOld body\n", "utf8");
+    await writeJsonl(path.join(workspacePath, "documents", "documents.jsonl"), [
+      {
+        id: expiredId,
+        sourceId: source.id,
+        sourceType: "rss",
+        title: "Old",
+        uri: expiredUrl,
+        sourceUri: source.uri,
+        mimeType: "text/html",
+        rawPath,
+        normalizedPath,
+        contentHash: "old-hash",
+        metadata: { tags: ["news"], sourceUri: source.uri, publicationDate: "2026-03-01T00:00:00.000Z" },
+        publicationDate: "2026-03-01T00:00:00.000Z",
+        crawledAt: "2026-05-18T00:00:00.000Z",
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z",
+        indexedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    const feedXml = `<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title><item><title>Fresh</title><link>https://example.com/fresh</link></item></channel></rss>`;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === source.uri) {
+        return new Response(feedXml, { status: 200, headers: { "content-type": "application/rss+xml" } });
+      }
+      if (url === "https://example.com/fresh") {
+        return new Response(htmlPage("Fresh", "Fresh body"), {
+          status: 200,
+          headers: { "content-type": "text/html", etag: "\"fresh\"" }
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ingestSources({ workspacePath, sourceIds: [source.id] });
+
+    const documents = await import("../src/core/jsonl.js").then((mod) => mod.readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl")));
+    expect(documents.map((document) => document.uri)).toEqual(["https://example.com/fresh"]);
+    await expect(stat(rawPath)).rejects.toThrow();
+    await expect(stat(normalizedPath)).rejects.toThrow();
+  });
 });

@@ -28,7 +28,19 @@ export async function updateSource(workspacePath: string, sourceId: string, patc
   if (index < 0) {
     throw new CliError(`source not found: ${sourceId}`, "SOURCE_NOT_FOUND", ExitCode.SourceError);
   }
-  const updated = { ...sources[index]!, ...patch, id: sourceId };
+  const current = sources[index]!;
+  const updated: Source = {
+    ...current,
+    ...patch,
+    id: sourceId,
+    metadata: patch.metadata ? { ...current.metadata, ...patch.metadata } : current.metadata,
+    crawl: patch.crawl
+      ? {
+          ...(current.crawl ?? {}),
+          ...patch.crawl
+        }
+      : current.crawl
+  };
   sources[index] = updated;
   await writeJsonl(sourcesFile(workspacePath), sources);
   return updated;

@@ -33,6 +33,16 @@ const RETRIEVAL_MODE_LIST = ["lexical", "dense", "sparse", "hybrid"] as const;
 const SEARCH_DATE_FIELDS = ["publicationDate", "firstSeenAt", "lastSeenAt", "lastChangedAt", "crawledAt"] as const;
 
 type SearchDateField = typeof SEARCH_DATE_FIELDS[number];
+type SourceConfigOptions = {
+  name?: string;
+  tag?: string[];
+  metadata?: string[];
+  maxDepth?: string;
+  maxPages?: string;
+  include?: string[];
+  exclude?: string[];
+  retentionDays?: string;
+};
 
 function parseKeyValue(input: string): [string, string] {
   const idx = input.indexOf("=");
@@ -44,6 +54,113 @@ function parseKeyValue(input: string): [string, string] {
 
 function normalizeMetadata(values: string[] = []): Metadata {
   return Object.fromEntries(values.map(parseKeyValue));
+}
+
+function parseOptionalNumber(input: string | undefined, optionName: string): number | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  const value = Number(input);
+  if (!Number.isFinite(value)) {
+    throw new CliError(`invalid number for ${optionName}: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return value;
+}
+
+function setWhenDefined<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {
+  if (value !== undefined) {
+    target[key] = value;
+  }
+}
+
+function createSourceCrawlConfig(type: SourceType, options: Record<string, unknown>, defaults: { retentionDays: number }): CrawlConfig | undefined {
+  if (!["url", "website", "directory", "rss"].includes(type)) {
+    return undefined;
+  }
+  const crawl: CrawlConfig = {};
+  setWhenDefined(crawl, "maxDepth", parseOptionalNumber(options.maxDepth as string | undefined, "--max-depth"));
+  setWhenDefined(crawl, "maxPages", parseOptionalNumber(options.maxPages as string | undefined, "--max-pages"));
+  setWhenDefined(crawl, "includePatterns", options.include as string[] | undefined);
+  setWhenDefined(crawl, "excludePatterns", options.exclude as string[] | undefined);
+  setWhenDefined(crawl, "obeyRobotsTxt", options.robots as boolean | undefined);
+  setWhenDefined(crawl, "rateLimitMs", parseOptionalNumber(options.rateLimitMs as string | undefined, "--rate-limit-ms"));
+  if (options.renderJs) {
+    crawl.renderJs = true;
+  }
+  if (type === "website") {
+    crawl.useSitemap = true;
+  }
+  if (type === "rss") {
+    crawl.retentionDays = parseOptionalNumber(options.retentionDays as string | undefined, "--retention-days") ?? defaults.retentionDays;
+    crawl.fetchArticles = true;
+  } else {
+    setWhenDefined(crawl, "retentionDays", parseOptionalNumber(options.retentionDays as string | undefined, "--retention-days"));
+  }
+  return Object.keys(crawl).length > 0 ? crawl : undefined;
+}
+
+function allowedSourceConfigFields(source: Source): Set<string> {
+  const fields = new Set<string>(["name", "tag", "metadata"]);
+  if (source.type === "rss") {
+    fields.add("retentionDays");
+  }
+  if (source.type === "website") {
+    fields.add("maxDepth");
+    fields.add("maxPages");
+    fields.add("include");
+    fields.add("exclude");
+  }
+  if (source.type === "directory") {
+    fields.add("include");
+    fields.add("exclude");
+  }
+  return fields;
+}
+
+function buildSourceConfigPatch(source: Source, options: SourceConfigOptions): Partial<Source> {
+  const allowed = allowedSourceConfigFields(source);
+  const patch: Partial<Source> = {};
+  if (options.name !== undefined) {
+    patch.name = options.name;
+  }
+  if (options.tag !== undefined) {
+    patch.tags = options.tag;
+  }
+  if (options.metadata !== undefined) {
+    patch.metadata = normalizeMetadata(options.metadata);
+  }
+
+  const crawlPatch: CrawlConfig = {};
+  const checkAllowed = (field: string, optionName: string): void => {
+    if (!allowed.has(field)) {
+      throw new CliError(`${optionName} is not supported for source type ${source.type}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+    }
+  };
+
+  if (options.maxDepth !== undefined) {
+    checkAllowed("maxDepth", "--max-depth");
+    crawlPatch.maxDepth = parseOptionalNumber(options.maxDepth, "--max-depth");
+  }
+  if (options.maxPages !== undefined) {
+    checkAllowed("maxPages", "--max-pages");
+    crawlPatch.maxPages = parseOptionalNumber(options.maxPages, "--max-pages");
+  }
+  if (options.include !== undefined) {
+    checkAllowed("include", "--include");
+    crawlPatch.includePatterns = options.include;
+  }
+  if (options.exclude !== undefined) {
+    checkAllowed("exclude", "--exclude");
+    crawlPatch.excludePatterns = options.exclude;
+  }
+  if (options.retentionDays !== undefined) {
+    checkAllowed("retentionDays", "--retention-days");
+    crawlPatch.retentionDays = parseOptionalNumber(options.retentionDays, "--retention-days");
+  }
+  if (Object.keys(crawlPatch).length > 0) {
+    patch.crawl = crawlPatch;
+  }
+  return patch;
 }
 
 function response<T>(command: string, workspace: string, data?: T, error?: CommandResponse<T>["error"]): CommandResponse<T> {
@@ -202,42 +319,35 @@ Examples:
     .requiredOption("--name <name>")
     .option("--tag <tag...>", "Optional tags used later for filtering during search.")
     .option("--metadata <key=value...>", "Extra metadata fields stored on the source.")
-    .option("--max-depth <n>", "Maximum crawl depth for website, URL, directory, and RSS sources.")
-    .option("--max-pages <n>", "Maximum number of pages or files to ingest from a crawlable source.")
+    .option("--max-depth <n>", "Maximum crawl depth for website sources.")
+    .option("--max-pages <n>", "Maximum number of pages to ingest from a website source.")
     .option("--include <pattern...>", "Only include matching paths or URLs.")
     .option("--exclude <pattern...>", "Skip matching paths or URLs.")
     .option("--render-js", "Render pages with JavaScript before extraction when supported.")
-    .option("--no-robots", "Ignore robots.txt. Use only when you control the target site or have permission.")
-    .option("--rate-limit-ms <n>", "Delay between requests for crawlable sources.")
-    .option("--retention-days <n>", "Retention window for feed or crawl snapshots.")
+    .option("--no-robots", "Ignore robots.txt for website crawling. Use only when you control the target site or have permission.")
+    .option("--rate-limit-ms <n>", "Delay between website requests.")
+    .option("--retention-days <n>", "Retention window in days for RSS items. Defaults to the workspace crawler retention setting.")
     .addHelpText("after", `
 Examples:
   qli source add directory ./docs --name "Local Docs" --tag docs
   qli source add file ./docs/auth.md --name "Auth Guide"
   qli source add url https://example.com/docs/auth --name "Auth Page"
   qli source add website https://example.com --name "Docs Site" --max-depth 2 --max-pages 50 --include /docs/
-  qli source add rss https://example.com/feed.xml --name "Release Feed" --retention-days 30`)
+  qli source add rss https://example.com/feed.xml --name "Release Feed"
+  qli source add rss https://example.com/feed.xml --name "Release Feed" --retention-days 30
+
+Notes:
+  RSS sources store retention per feed.
+  When you omit --retention-days for RSS, qli stores the workspace default from config.yaml.`)
     .action(async function command(type: SourceType, uri: string, options) {
       if (!SOURCE_TYPES.has(type)) {
         throw new CliError(`unsupported source type: ${type}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
       }
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const config = await loadConfig(workspace, global.config);
       const now = new Date().toISOString();
-      const crawl: CrawlConfig | undefined = ["url", "website", "directory", "rss"].includes(type)
-        ? {
-            maxDepth: options.maxDepth ? Number(options.maxDepth) : undefined,
-            maxPages: options.maxPages ? Number(options.maxPages) : undefined,
-            includePatterns: options.include,
-            excludePatterns: options.exclude,
-            obeyRobotsTxt: options.robots,
-            rateLimitMs: options.rateLimitMs ? Number(options.rateLimitMs) : undefined,
-            renderJs: Boolean(options.renderJs),
-            useSitemap: type === "website" ? true : undefined,
-            retentionDays: options.retentionDays ? Number(options.retentionDays) : undefined,
-            fetchArticles: type === "rss" ? true : undefined
-          }
-        : undefined;
+      const crawl = createSourceCrawlConfig(type, options, { retentionDays: config.crawler.retentionDays });
       const stored = await addSource(workspace, {
         type,
         uri: ["file", "directory"].includes(type) ? path.resolve(uri) : uri,
@@ -250,6 +360,44 @@ Examples:
         updatedAt: now
       });
       emit(global.json, capture, response("source add", workspace, stored), `Added source ${stored.id}`);
+    });
+
+  source.command("config")
+    .description("Edit supported settings on an existing source.")
+    .argument("<sourceId>", "Source id from qli source list.")
+    .option("--name <name>", "Update the source name.")
+    .option("--tag <tag...>", "Replace source tags with the provided values.")
+    .option("--metadata <key=value...>", "Merge metadata keys into the existing source metadata.")
+    .option("--max-depth <n>", "Set website crawl depth.")
+    .option("--max-pages <n>", "Set the page limit for website sources.")
+    .option("--include <pattern...>", "Set include patterns for website or directory sources.")
+    .option("--exclude <pattern...>", "Set exclude patterns for website or directory sources.")
+    .option("--retention-days <n>", "Set RSS retention in days for this feed.")
+    .addHelpText("after", `
+Examples:
+  qli source config src_123 --retention-days 30
+  qli source config src_123 --name "Docs Feed" --tag rss docs
+  qli source config src_123 --include /docs/ --exclude /docs/archive/
+  qli source config src_123 --metadata team=docs owner=platform --json
+
+Notes:
+  qli only exposes settings that the current source type uses at runtime.
+  URI, source type, and source id do not change here.`)
+    .action(async function command(sourceId: string, options: SourceConfigOptions) {
+      const global = this.optsWithGlobals();
+      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const sources = await listSources(workspace);
+      const current = sources.find((source) => source.id === sourceId);
+      if (!current) {
+        throw new CliError(`source not found: ${sourceId}`, "SOURCE_NOT_FOUND", ExitCode.SourceError);
+      }
+      const patch = buildSourceConfigPatch(current, options);
+      if (Object.keys(patch).length === 0) {
+        throw new CliError("no changes requested", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+      }
+      patch.updatedAt = new Date().toISOString();
+      const updated = await updateSource(workspace, sourceId, patch);
+      emit(global.json, capture, response("source config", workspace, updated), `Updated source ${sourceId}`);
     });
 
   source.command("list")

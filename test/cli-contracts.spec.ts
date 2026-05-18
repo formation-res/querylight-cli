@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../src/cli/run-cli.js";
 import { cleanupTempDirs, tempWorkspace } from "./helpers.js";
@@ -55,6 +56,47 @@ describe("cli contracts", () => {
 
     const enabled = await runCli(["source", "enable", sourceId, "--workspace", workspace, "--json"]);
     expect(JSON.parse(enabled.stdout).data.enabled).toBe(true);
+  });
+
+  it("stores rss retention per feed and edits it through source config", async () => {
+    const root = await tempWorkspace("qli-cli-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const added = await runCli([
+      "source",
+      "add",
+      "rss",
+      "https://example.com/feed.xml",
+      "--workspace",
+      workspace,
+      "--name",
+      "Feed",
+      "--json"
+    ]);
+    const addedParsed = JSON.parse(added.stdout);
+    expect(addedParsed.data.crawl.retentionDays).toBe(365);
+    expect(addedParsed.data.crawl.fetchArticles).toBe(true);
+
+    const updated = await runCli([
+      "source",
+      "config",
+      addedParsed.data.id,
+      "--workspace",
+      workspace,
+      "--retention-days",
+      "30",
+      "--metadata",
+      "team=docs",
+      "--json"
+    ]);
+    const updatedParsed = JSON.parse(updated.stdout);
+    expect(updatedParsed.data.crawl.retentionDays).toBe(30);
+    expect(updatedParsed.data.crawl.fetchArticles).toBe(true);
+    expect(updatedParsed.data.metadata.team).toBe("docs");
+
+    const stored = await readFile(path.join(workspace, "sources", "sources.jsonl"), "utf8");
+    expect(stored).toContain("\"retentionDays\":30");
   });
 
   it("returns status and doctor json envelopes", async () => {
