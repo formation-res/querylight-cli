@@ -356,14 +356,14 @@ export async function searchIndex(
 
   const denseHits = async () => {
     if (!await fileExists(denseVectorPath(workspacePath))) {
-      throw new CliError("dense vector index is not built; run `qli models pull --dense` and `qli rebuild --dense`", "DENSE_INDEX_MISSING", ExitCode.QueryError);
+      throw new CliError("dense vector index is not built; run `qli models pull --dense` and `qli rebuild`", "DENSE_INDEX_MISSING", ExitCode.QueryError);
     }
     return denseQuery({ workspacePath, config: config.retrieval.dense, query, topK: candidateLimit }).then((hits) => hits.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit));
   };
 
   const sparseHits = async () => {
     if (!await fileExists(sparseVectorPath(workspacePath))) {
-      throw new CliError("sparse vector index is not built; run `qli models pull --sparse` and `qli rebuild --sparse`", "SPARSE_INDEX_MISSING", ExitCode.QueryError);
+      throw new CliError("sparse vector index is not built; run `qli models pull --sparse` and `qli rebuild`", "SPARSE_INDEX_MISSING", ExitCode.QueryError);
     }
     return sparseQuery({ workspacePath, config: config.retrieval.sparse, query, topK: candidateLimit }).then((hits) => hits.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit));
   };

@@ -1,6 +1,6 @@
 import Table from "cli-table3";
 import colors from "picocolors";
-import type { SearchResult, Source } from "../types/models.js";
+import type { RelatedDocumentResult, SearchResult, Source } from "../types/models.js";
 
 export function formatSourcesTable(sources: Source[]): string {
   const table = new Table({ head: ["ID", "TYPE", "NAME", "URI", "ENABLED", "TAGS"] });
@@ -16,5 +16,13 @@ export function formatSearchResults(results: SearchResult[]): string {
     `   ${result.uri}`,
     `   Score: ${result.score.toFixed(3)}`,
     `   ${result.snippet}`
+  ].join("\n")).join("\n\n");
+}
+
+export function formatRelatedDocuments(results: RelatedDocumentResult[]): string {
+  return results.map((result, index) => [
+    `${index + 1}. ${colors.bold(result.title)}`,
+    `   ${result.uri}`,
+    `   Similarity: ${result.score.toFixed(3)}`
   ].join("\n")).join("\n\n");
 }

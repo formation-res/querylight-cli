@@ -85,6 +85,12 @@ Search it:
 qli search "API authentication"
 ```
 
+Find related documents for an existing one:
+
+```bash
+qli related <document-id-or-uri>
+```
+
 Generate retrieval context:
 
 ```bash
@@ -235,6 +241,28 @@ qli source list
 qli source disable <source-id>
 qli source enable <source-id>
 qli source remove <source-id>
+```
+
+### Find Related Documents
+
+Build dense vectors first:
+
+```bash
+qli models pull --dense
+qli rebuild
+```
+
+Or pull every model that is available on the current machine:
+
+```bash
+qli models pull
+```
+
+Then ask for documents related to an existing document id or URI:
+
+```bash
+qli related <document-id>
+qli related https://example.com/docs/auth
 ```
 
 ### Ingest, Chunk, Index

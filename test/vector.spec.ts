@@ -1,9 +1,11 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureWorkspace } from "../src/core/workspace.js";
 import { loadConfig } from "../src/core/config.js";
 import { writeJsonl } from "../src/core/jsonl.js";
 import { buildIndex } from "../src/index/querylight-indexer.js";
+import { findRelatedDocuments } from "../src/query/related-service.js";
 import { searchIndex } from "../src/query/search-service.js";
 import { createContext } from "../src/query/context-builder.js";
 import { readDensePayload, readSparsePayload } from "../src/vector/store.js";
@@ -177,6 +179,128 @@ describe("vector helpers and retrieval", () => {
     const context = await createContext({ workspacePath, query: "bm25 ranking", topK: 5, maxChars: 500, retrievalMode: "hybrid" });
     expect(context.retrievalMode).toBe("hybrid");
     expect(context.markdown).toContain("Chunk ID:");
+  });
+
+  it("finds related documents from dense document embeddings", async () => {
+    const root = await tempWorkspace("qli-vector-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n", "utf8");
+    await writeJsonl(path.join(workspacePath, "sources", "sources.jsonl"), [
+      {
+        id: "src1",
+        type: "directory",
+        name: "Docs",
+        uri: "/tmp/docs",
+        enabled: true,
+        tags: ["docs"],
+        metadata: {},
+        createdAt: "2026-05-18T00:00:00.000Z",
+        updatedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+    await writeJsonl(path.join(workspacePath, "documents", "documents.jsonl"), [
+      {
+        id: "doc-bm25",
+        sourceId: "src1",
+        sourceType: "directory",
+        title: "BM25 Guide",
+        uri: "file:///bm25.md",
+        mimeType: "text/markdown",
+        normalizedPath: "unused",
+        contentHash: "hash1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "doc-bm25-advanced",
+        sourceId: "src1",
+        sourceType: "directory",
+        title: "Advanced BM25",
+        uri: "file:///bm25-advanced.md",
+        mimeType: "text/markdown",
+        normalizedPath: "unused",
+        contentHash: "hash2",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "doc-sparse",
+        sourceId: "src1",
+        sourceType: "directory",
+        title: "Sparse Search",
+        uri: "file:///sparse.md",
+        mimeType: "text/markdown",
+        normalizedPath: "unused",
+        contentHash: "hash3",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+    await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
+      {
+        id: "chunk-bm25-a",
+        documentId: "doc-bm25",
+        sourceId: "src1",
+        title: "BM25 Guide",
+        uri: "file:///bm25.md",
+        headingPath: ["Ranking"],
+        text: "BM25 ranking explains lexical term weighting.",
+        contentHash: "c1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "chunk-bm25-b",
+        documentId: "doc-bm25-advanced",
+        sourceId: "src1",
+        title: "Advanced BM25",
+        uri: "file:///bm25-advanced.md",
+        headingPath: ["Deep Dive"],
+        text: "Advanced BM25 tuning covers ranking behavior and token weighting.",
+        contentHash: "c2",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "chunk-sparse",
+        documentId: "doc-sparse",
+        sourceId: "src1",
+        title: "Sparse Search",
+        uri: "file:///sparse.md",
+        headingPath: ["Vectors"],
+        text: "Sparse vector search uses token weights and expansion.",
+        contentHash: "c3",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    setDenseEmbedderFactoryForTests(async () => async (text) => fakeDenseEmbedding(text));
+
+    await buildIndex({ workspacePath, denseOverride: true });
+
+    const related = await findRelatedDocuments({
+      workspacePath,
+      document: "doc-bm25",
+      topK: 5
+    });
+
+    expect(related.retrievalMode).toBe("dense");
+    expect(related.sourceDocument.documentId).toBe("doc-bm25");
+    expect(related.results[0]?.documentId).toBe("doc-bm25-advanced");
+    expect(related.results[0]?.score).toBeGreaterThan(related.results[1]?.score ?? -1);
   });
 
 });

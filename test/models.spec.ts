@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureWorkspace } from "../src/core/workspace.js";
 import { runCli } from "../src/cli/run-cli.js";
+import { resolveModelPullPlan } from "../src/vector/service.js";
 import { writeDensePullMarker, writeSparsePullMarker } from "../src/vector/store.js";
 import { cleanupTempDirs, tempWorkspace } from "./helpers.js";
 
@@ -10,6 +11,37 @@ afterEach(async () => {
 });
 
 describe("model commands", () => {
+  it("pulls all available models by default", () => {
+    expect(resolveModelPullPlan({
+      pullDenseFlag: false,
+      pullSparseFlag: false,
+      uvAvailable: true
+    })).toEqual({
+      pullDense: true,
+      pullSparse: true
+    });
+
+    expect(resolveModelPullPlan({
+      pullDenseFlag: false,
+      pullSparseFlag: false,
+      uvAvailable: false
+    })).toEqual({
+      pullDense: true,
+      pullSparse: false
+    });
+  });
+
+  it("keeps explicit pull flags strict", () => {
+    expect(resolveModelPullPlan({
+      pullDenseFlag: false,
+      pullSparseFlag: true,
+      uvAvailable: false
+    })).toEqual({
+      pullDense: false,
+      pullSparse: true
+    });
+  });
+
   it("reports model status with artifact and runtime fields", async () => {
     const root = await tempWorkspace("qli-models-");
     const workspace = path.join(root, ".kb");

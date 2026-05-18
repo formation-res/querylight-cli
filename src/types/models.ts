@@ -245,6 +245,26 @@ export type SearchResponseData = {
   results: SearchResult[];
 };
 
+export type RelatedDocumentResult = {
+  documentId: string;
+  sourceId: string;
+  score: number;
+  title: string;
+  uri: string;
+  metadata: Record<string, unknown>;
+};
+
+export type RelatedDocumentsResponseData = {
+  sourceDocument: {
+    documentId: string;
+    sourceId: string;
+    title: string;
+    uri: string;
+  };
+  retrievalMode: "dense";
+  results: RelatedDocumentResult[];
+};
+
 export type ContextSource = {
   chunkId: string;
   documentId: string;

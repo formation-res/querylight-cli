@@ -48,11 +48,13 @@ export async function buildIndex(
   {
     workspacePath,
     denseOverride,
-    sparseOverride
+    sparseOverride,
+    buildAvailableModels = false
   }: {
     workspacePath: string;
     denseOverride?: boolean;
     sparseOverride?: boolean;
+    buildAvailableModels?: boolean;
   }
 ): Promise<{ metadata: IndexMetadata; indexPath: string; denseBuilt: boolean; sparseBuilt: boolean }> {
   const config = await loadConfig(workspacePath);
@@ -94,7 +96,8 @@ export async function buildIndex(
     workspacePath,
     config,
     denseOverride,
-    sparseOverride
+    sparseOverride,
+    buildAvailableModels
   });
   return {
     metadata,
