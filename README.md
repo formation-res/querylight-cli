@@ -35,6 +35,30 @@ Then run:
 npx qli --help
 ```
 
+### Local Development with `npm link`
+
+If you are working from a local checkout of this repository and want a real `qli` command available in any directory:
+
+```bash
+cd /path/to/querylight-cli
+npm install
+npm run build
+npm link
+```
+
+After that, you can use `qli` anywhere on your machine:
+
+```bash
+cd /some/project
+qli --help
+```
+
+To remove the linked command later:
+
+```bash
+npm unlink -g @formation/querylight-cli
+```
+
 ## Quick Start
 
 Initialize a workspace:
@@ -65,6 +89,64 @@ Generate retrieval context:
 
 ```bash
 qli context "How do I authenticate API requests?" --top-k 8
+```
+
+## Example: Index `querylight.tryformation.com`
+
+This example uses a local linked build of `qli` to create a test knowledge base for the Querylight documentation website.
+
+1. Link the local CLI:
+
+```bash
+cd /path/to/querylight-cli
+npm install
+npm run build
+npm link
+```
+
+2. Create a fresh test workspace:
+
+```bash
+mkdir -p ~/querylight-ts-search
+cd ~/querylight-ts-search
+```
+
+3. Initialize the knowledge base:
+
+```bash
+qli init
+```
+
+4. Add the Querylight website as a source:
+
+```bash
+qli source add website https://querylight.tryformation.com \
+  --name "Querylight TS Docs" \
+  --max-depth 2 \
+  --max-pages 50 \
+  --include /docs/ \
+  --tag docs
+```
+
+5. Build the local index:
+
+```bash
+qli rebuild
+```
+
+6. Inspect and query the result:
+
+```bash
+qli status
+qli source list
+qli search "BM25 ranking"
+qli context "How does Querylight TS handle BM25 ranking?" --top-k 8
+```
+
+If you want the workspace somewhere else, use:
+
+```bash
+qli --workspace /custom/path/.kb <command>
 ```
 
 ## Workspace
