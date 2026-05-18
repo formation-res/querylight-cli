@@ -10,8 +10,10 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "scripts",
     "Dockerfile",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22"
@@ -24,6 +26,7 @@
     "check": "npm run lint && npm test"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@tryformation/querylight-ts": "^0.10.0",
     "cheerio": "^1.2.0",
     "cli-table3": "^0.6.5",

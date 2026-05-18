@@ -6,15 +6,17 @@ export async function createContext(
     workspacePath,
     query,
     topK,
-    maxChars
+    maxChars,
+    retrievalMode
   }: {
     workspacePath: string;
     query: string;
     topK: number;
     maxChars: number;
+    retrievalMode?: import("../types/models.js").RetrievalMode;
   }
 ): Promise<ContextResponseData> {
-  const search = await searchIndex({ workspacePath, query, topK, showChunks: true });
+  const search = await searchIndex({ workspacePath, query, topK, showChunks: true, retrievalMode });
   const sources: ContextSource[] = [];
   let total = 0;
   for (const result of search.results) {
@@ -48,5 +50,5 @@ export async function createContext(
       ""
     ].filter((line) => line !== ""))
   ].join("\n");
-  return { markdown, sources };
+  return { markdown, sources, retrievalMode: search.retrievalMode };
 }

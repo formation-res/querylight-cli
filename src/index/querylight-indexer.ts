@@ -1,8 +1,10 @@
 import { Analyzer, DocumentIndex, KeywordTokenizer, LowerCaseTextFilter, RankingAlgorithm, TextFieldIndex } from "@tryformation/querylight-ts";
 import path from "node:path";
+import { loadConfig } from "../core/config.js";
 import { sha256 } from "../core/hashing.js";
 import { readJsonl } from "../core/jsonl.js";
 import type { ChunkRecord, DocumentRecord, IndexMetadata, Source } from "../types/models.js";
+import { buildVectorArtifacts } from "../vector/service.js";
 import { writeIndexArtifacts } from "./index-store.js";
 
 function keywordFieldIndex(): TextFieldIndex {
@@ -41,11 +43,16 @@ function flattenMetadata(metadata: Record<string, unknown>): Record<string, stri
 
 export async function buildIndex(
   {
-    workspacePath
+    workspacePath,
+    denseOverride,
+    sparseOverride
   }: {
     workspacePath: string;
+    denseOverride?: boolean;
+    sparseOverride?: boolean;
   }
-): Promise<{ metadata: IndexMetadata; indexPath: string }> {
+): Promise<{ metadata: IndexMetadata; indexPath: string; denseBuilt: boolean; sparseBuilt: boolean }> {
+  const config = await loadConfig(workspacePath);
   const chunks = await readJsonl<ChunkRecord>(path.join(workspacePath, "chunks", "chunks.jsonl"));
   const documents = await readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl"));
   const sources = await readJsonl<Source>(path.join(workspacePath, "sources", "sources.jsonl"));
@@ -80,5 +87,16 @@ export async function buildIndex(
     indexHash: sha256(JSON.stringify(index.indexState))
   };
   const artifacts = await writeIndexArtifacts({ workspacePath, indexState: index.indexState, metadata });
-  return { metadata, indexPath: artifacts.indexPath };
+  const vectors = await buildVectorArtifacts({
+    workspacePath,
+    config,
+    denseOverride,
+    sparseOverride
+  });
+  return {
+    metadata,
+    indexPath: artifacts.indexPath,
+    denseBuilt: Boolean(vectors.dense),
+    sparseBuilt: Boolean(vectors.sparse)
+  };
 }

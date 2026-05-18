@@ -8,6 +8,7 @@ export type SourceType =
 
 export type PrimitiveMetadata = string | number | boolean | string[];
 export type Metadata = Record<string, PrimitiveMetadata>;
+export type RetrievalMode = "lexical" | "dense" | "sparse" | "hybrid";
 
 export type CrawlConfig = {
   maxDepth?: number;
@@ -83,6 +84,81 @@ export type IndexMetadata = {
   indexHash: string;
 };
 
+export type DenseVectorModelConfig = {
+  enabled: boolean;
+  modelId: string;
+  cacheDir: string;
+  indexHashTables: number;
+  indexRandomSeed: number;
+  chunkTextMode: "title-heading-text";
+};
+
+export type SparseVectorModelConfig = {
+  enabled: boolean;
+  modelId: string;
+  cacheDir: string;
+  documentTopTokens: number;
+  queryEncoding: "tokenizer-token-weights";
+  documentEncoding: "masked-lm-max-log1p-relu";
+  chunkTextMode: "title-heading-text";
+};
+
+export type DenseVectorMetadata = {
+  createdAt: string;
+  modelId: string;
+  dimensions: number;
+  hashTables: number;
+  randomSeed: number;
+  chunkCount: number;
+  indexHash: string;
+};
+
+export type SparseVectorMetadata = {
+  createdAt: string;
+  modelId: string;
+  vocabularySize: number;
+  documentTopTokens: number;
+  queryEncoding: "tokenizer-token-weights";
+  documentEncoding: "masked-lm-max-log1p-relu";
+  chunkCount: number;
+  indexHash: string;
+};
+
+export type DenseVectorRecord = {
+  chunkId: string;
+  documentId: string;
+  sourceId: string;
+  title: string;
+  uri: string;
+  headingPath: string[];
+  text: string;
+  embedding: number[];
+};
+
+export type SparseVectorRecord = {
+  chunkId: string;
+  documentId: string;
+  sourceId: string;
+  title: string;
+  uri: string;
+  headingPath: string[];
+  text: string;
+  vector: Record<string, number>;
+};
+
+export type DenseVectorPayload = {
+  metadata: DenseVectorMetadata;
+  indexState: object;
+  chunks: DenseVectorRecord[];
+};
+
+export type SparseVectorPayload = {
+  metadata: SparseVectorMetadata;
+  indexState: object;
+  chunks: SparseVectorRecord[];
+  queryTokenWeights: number[];
+};
+
 export type WorkspaceConfig = {
   workspaceVersion: number;
   index: {
@@ -99,6 +175,11 @@ export type WorkspaceConfig = {
     defaultTopK: number;
     maxContextChars: number;
     citationStyle: "markdown";
+  };
+  retrieval: {
+    defaultMode: RetrievalMode;
+    dense: DenseVectorModelConfig;
+    sparse: SparseVectorModelConfig;
   };
   crawler: {
     defaultUserAgent: string;
@@ -142,6 +223,7 @@ export type SearchResult = {
 };
 
 export type SearchResponseData = {
+  retrievalMode?: RetrievalMode;
   results: SearchResult[];
 };
 
@@ -157,8 +239,32 @@ export type ContextSource = {
 };
 
 export type ContextResponseData = {
+  retrievalMode?: RetrievalMode;
   markdown: string;
   sources: ContextSource[];
+};
+
+export type ModelPullResponse = {
+  dense?: { pulled: boolean; modelId: string; cacheDir: string };
+  sparse?: { pulled: boolean; modelId: string; cacheDir: string };
+};
+
+export type ModelStatusResponse = {
+  dense: {
+    configured: boolean;
+    modelId: string;
+    cacheDir: string;
+    available: boolean;
+    artifactExists: boolean;
+  };
+  sparse: {
+    configured: boolean;
+    modelId: string;
+    cacheDir: string;
+    uvAvailable: boolean;
+    available: boolean;
+    artifactExists: boolean;
+  };
 };
 
 export type RunRecord = {

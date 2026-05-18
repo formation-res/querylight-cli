@@ -27,6 +27,26 @@ export const defaultConfig = (): WorkspaceConfig => ({
     maxContextChars: 12000,
     citationStyle: "markdown"
   },
+  retrieval: {
+    defaultMode: "lexical",
+    dense: {
+      enabled: false,
+      modelId: "Xenova/all-MiniLM-L6-v2",
+      cacheDir: ".kb/models/huggingface",
+      indexHashTables: 8,
+      indexRandomSeed: 42,
+      chunkTextMode: "title-heading-text"
+    },
+    sparse: {
+      enabled: false,
+      modelId: "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill",
+      cacheDir: ".kb/models/huggingface",
+      documentTopTokens: 128,
+      queryEncoding: "tokenizer-token-weights",
+      documentEncoding: "masked-lm-max-log1p-relu",
+      chunkTextMode: "title-heading-text"
+    }
+  },
   crawler: {
     defaultUserAgent: "querylight-cli/0.1",
     obeyRobotsTxt: true,
@@ -56,5 +76,46 @@ export async function writeDefaultConfig(workspacePath: string, force = false): 
 export async function loadConfig(workspacePath: string, configPath?: string): Promise<WorkspaceConfig> {
   const resolved = configPath ?? path.join(workspacePath, "config.yaml");
   const raw = await readFile(resolved, "utf8");
-  return YAML.parse(raw) as WorkspaceConfig;
+  const parsed = YAML.parse(raw) as Partial<WorkspaceConfig>;
+  const defaults = defaultConfig();
+  return {
+    ...defaults,
+    ...parsed,
+    index: {
+      ...defaults.index,
+      ...parsed.index,
+      fields: {
+        ...defaults.index.fields,
+        ...(parsed.index?.fields ?? {})
+      },
+      chunking: {
+        ...defaults.index.chunking,
+        ...(parsed.index?.chunking ?? {})
+      }
+    },
+    rag: {
+      ...defaults.rag,
+      ...(parsed.rag ?? {})
+    },
+    retrieval: {
+      ...defaults.retrieval,
+      ...(parsed.retrieval ?? {}),
+      dense: {
+        ...defaults.retrieval.dense,
+        ...(parsed.retrieval?.dense ?? {})
+      },
+      sparse: {
+        ...defaults.retrieval.sparse,
+        ...(parsed.retrieval?.sparse ?? {})
+      }
+    },
+    crawler: {
+      ...defaults.crawler,
+      ...(parsed.crawler ?? {})
+    },
+    limits: {
+      ...defaults.limits,
+      ...(parsed.limits ?? {})
+    }
+  };
 }
