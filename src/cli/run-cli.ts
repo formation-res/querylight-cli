@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { chunkDocuments } from "../chunk/chunker.js";
@@ -20,10 +20,20 @@ import { readJsonl } from "../core/jsonl.js";
 import { readLatestIndexMetadata } from "../index/index-store.js";
 import { getModelStatus, pullModels, resolveModelPullPlan } from "../vector/service.js";
 import { ensureUvAvailable } from "../vector/runtime.js";
+import type { ProgressHandler, ProgressLevel } from "../core/progress.js";
 
 type IoCapture = {
   stdout: string[];
   stderr: string[];
+};
+
+type GlobalCliOptions = {
+  workspace?: string;
+  config?: string;
+  json?: boolean;
+  verbose?: boolean;
+  quiet?: boolean;
+  silent?: boolean;
 };
 
 const SOURCE_TYPES = new Set<SourceType>(["url", "website", "rss", "file", "directory", "markdown", "text"]);
@@ -178,6 +188,18 @@ function writeOutput(capture: IoCapture, value: string, stderr = false): void {
   (stderr ? capture.stderr : capture.stdout).push(value);
 }
 
+function createProgressHandler(capture: IoCapture, options: GlobalCliOptions): ProgressHandler | undefined {
+  if (options.json || options.silent || options.quiet) {
+    return undefined;
+  }
+  return (level: ProgressLevel, message: string) => {
+    if (level === "detail" && !options.verbose) {
+      return;
+    }
+    writeOutput(capture, message, true);
+  };
+}
+
 function parseRetrievalMode(input: string | undefined): RetrievalMode | undefined {
   if (!input) {
     return undefined;
@@ -277,8 +299,9 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
     .option("--workspace <path>", "Workspace directory. Defaults to .kb in the current directory.", DEFAULT_WORKSPACE)
     .option("--config <path>", "Optional config file override. Useful for testing alternate retrieval settings.")
     .option("--json", "Return a stable JSON envelope for automation and agents.")
+    .option("--silent", "Suppress progress logging for long-running commands.")
     .option("--verbose", "Print more operational detail when a command supports it.")
-    .option("--quiet", "Suppress non-essential human-readable output.");
+    .addOption(new Option("--quiet", "Deprecated alias for --silent.").hideHelp());
   program.addHelpText("after", `
 Workflow:
   1. Initialize a workspace with qli init
@@ -290,8 +313,12 @@ Examples:
   qli init
   qli source add directory ./docs --name "Product Docs" --tag docs
   qli rebuild
+  qli rebuild --silent
   qli search "api authentication" --top-k 8
   qli context "How do API keys work?" --top-k 8 --max-chars 8000
+
+Long-running commands print progress to stderr by default. Use --silent to suppress it.
+Use --json when another tool needs stable structured output.
 
 Use qli <command> --help for command-specific options and examples.`);
 
@@ -463,11 +490,17 @@ Examples:
 Examples:
   qli ingest
   qli ingest --source src_123
-  qli ingest --changed-only`)
+  qli ingest --changed-only
+  qli ingest --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
-      const result = await ingestSources({ workspacePath: workspace, sourceIds: options.source ? [options.source] : undefined, changedOnly: Boolean(options.changedOnly) });
+      const result = await ingestSources({
+        workspacePath: workspace,
+        sourceIds: options.source ? [options.source] : undefined,
+        changedOnly: Boolean(options.changedOnly),
+        progress: createProgressHandler(capture, global)
+      });
       emit(global.json, capture, response("ingest", workspace, result), `Ingested ${result.processedSources} sources`);
     });
 
@@ -479,11 +512,17 @@ Examples:
 Examples:
   qli chunk
   qli chunk --source src_123
-  qli chunk --document doc_123`)
+  qli chunk --document doc_123
+  qli chunk --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
-      const result = await chunkDocuments({ workspacePath: workspace, sourceId: options.source, documentId: options.document });
+      const result = await chunkDocuments({
+        workspacePath: workspace,
+        sourceId: options.source,
+        documentId: options.document,
+        progress: createProgressHandler(capture, global)
+      });
       emit(global.json, capture, response("chunk", workspace, result), `Wrote ${result.chunksWritten} chunks`);
     });
 
@@ -495,11 +534,17 @@ Examples:
 Examples:
   qli reprocess
   qli reprocess --source src_123
-  qli reprocess --document doc_123`)
+  qli reprocess --document doc_123
+  qli reprocess --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
-      const result = await reprocessDocuments({ workspacePath: workspace, sourceId: options.source, documentId: options.document });
+      const result = await reprocessDocuments({
+        workspacePath: workspace,
+        sourceId: options.source,
+        documentId: options.document,
+        progress: createProgressHandler(capture, global)
+      });
       emit(global.json, capture, response("reprocess", workspace, result), `Reprocessed ${result.documentsReprocessed} documents`);
     });
 
@@ -513,14 +558,16 @@ Examples:
 Examples:
   qli index build
   qli index build --dense
-  qli index build --dense --sparse`)
+  qli index build --dense --sparse
+  qli index build --silent`)
     .action(async function command(options) {
     const global = this.optsWithGlobals();
     const workspace = await resolveWorkspace({ workspace: global.workspace });
     const result = await buildIndex({
       workspacePath: workspace,
       denseOverride: options.dense ? true : undefined,
-      sparseOverride: options.sparse ? true : undefined
+      sparseOverride: options.sparse ? true : undefined,
+      progress: createProgressHandler(capture, global)
     });
     emit(global.json, capture, response("index build", workspace, result), `Built index at ${result.indexPath}`);
   });
@@ -536,19 +583,31 @@ Examples:
   qli rebuild
   qli rebuild --changed-only
   qli rebuild --source src_123
-  qli rebuild --dense --sparse`)
+  qli rebuild --dense --sparse
+  qli rebuild --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
-      const ingest = await ingestSources({ workspacePath: workspace, sourceIds: options.source ? [options.source] : undefined, changedOnly: Boolean(options.changedOnly) });
-      const chunk = await chunkDocuments({ workspacePath: workspace, sourceId: options.source });
+      const progress = createProgressHandler(capture, global);
+      progress?.("info", "Rebuild step 1/3: ingest");
+      const ingest = await ingestSources({
+        workspacePath: workspace,
+        sourceIds: options.source ? [options.source] : undefined,
+        changedOnly: Boolean(options.changedOnly),
+        progress
+      });
+      progress?.("info", "Rebuild step 2/3: chunk");
+      const chunk = await chunkDocuments({ workspacePath: workspace, sourceId: options.source, progress });
+      progress?.("info", "Rebuild step 3/3: index");
       const indexBuild = await buildIndex({
         workspacePath: workspace,
         denseOverride: options.dense ? true : undefined,
         sparseOverride: options.sparse ? true : undefined,
-        buildAvailableModels: true
+        buildAvailableModels: true,
+        progress
       });
       const data = { ingest, chunk, indexPath: indexBuild.indexPath, metadata: indexBuild.metadata };
+      progress?.("info", "Rebuild complete");
       emit(global.json, capture, response("rebuild", workspace, data), `Processed ${ingest.processedSources} sources, wrote ${chunk.chunksWritten} chunks`);
     });
 
@@ -673,6 +732,7 @@ Examples:
   qli models pull
   qli models pull --dense
   qli models pull --sparse
+  qli models pull --silent
 
 If you plan to use related, dense search, or hybrid retrieval, pull the models and rebuild the index first.`)
     .action(async function command(options) {
@@ -685,7 +745,7 @@ If you plan to use related, dense search, or hybrid retrieval, pull the models a
         pullSparseFlag: Boolean(options.sparse),
         uvAvailable: status.sparse.uvAvailable
       });
-      await pullModels({ workspacePath: workspace, config, pullDense, pullSparse });
+      await pullModels({ workspacePath: workspace, config, pullDense, pullSparse, progress: createProgressHandler(capture, global) });
       const data = {
         dense: pullDense ? { pulled: true, modelId: config.retrieval.dense.modelId, cacheDir: config.retrieval.dense.cacheDir } : undefined,
         sparse: pullSparse ? { pulled: true, modelId: config.retrieval.sparse.modelId, cacheDir: config.retrieval.sparse.cacheDir } : undefined

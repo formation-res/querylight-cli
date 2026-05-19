@@ -4,6 +4,7 @@ import { loadConfig } from "../core/config.js";
 import { fileExists } from "../core/files.js";
 import { stableId } from "../core/ids.js";
 import { readJsonl, writeJsonl } from "../core/jsonl.js";
+import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
 import { writeRun } from "../core/runs.js";
 import type { DocumentRecord, RunRecord, Source } from "../types/models.js";
 import { listSources } from "../sources/source-store.js";
@@ -156,11 +157,13 @@ export async function ingestSources(
   {
     workspacePath,
     sourceIds,
-    changedOnly = false
+    changedOnly = false,
+    progress
   }: {
     workspacePath: string;
     sourceIds?: string[];
     changedOnly?: boolean;
+    progress?: ProgressHandler;
   }
 ): Promise<{
   runId: string;
@@ -179,7 +182,10 @@ export async function ingestSources(
   let failed = 0;
   const failures: Array<{ sourceId: string; uri: string; message: string }> = [];
 
+  reportProgress(progress, `Ingesting ${sources.length} source${sources.length === 1 ? "" : "s"}`);
+
   for (const source of sources) {
+    const sourceBefore = { added, changed, unchanged, failed };
     const ingestOne = async (uri: string, producer: () => Promise<DocumentRecord>): Promise<void> => {
       try {
         const probeId = stableId("doc", source.id, uri);
@@ -200,31 +206,35 @@ export async function ingestSources(
           uri,
           message: error instanceof Error ? error.message : String(error)
         });
+        reportProgressDetail(progress, `Failed ${uri}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
 
     try {
+      reportProgress(progress, `Source ${source.name} (${source.type})`);
       if (source.type === "file") {
+        reportProgressDetail(progress, `Reading file ${source.uri}`);
         await ingestOne(source.uri, () => ingestFile({ workspacePath, source, filePath: source.uri, previous: previous.get(stableId("doc", source.id, source.uri)) }));
-        continue;
-      }
-      if (source.type === "directory") {
-        for (const filePath of await listDirectoryFiles(source)) {
+      } else if (source.type === "directory") {
+        const files = await listDirectoryFiles(source);
+        reportProgressDetail(progress, `Scanning ${files.length} file${files.length === 1 ? "" : "s"} from ${source.uri}`);
+        for (const filePath of files) {
+          reportProgressDetail(progress, `Reading file ${filePath}`);
           await ingestOne(filePath, () => ingestFile({ workspacePath, source, filePath, previous: previous.get(stableId("doc", source.id, filePath)) }));
         }
-        continue;
-      }
-      if (source.type === "url") {
+      } else if (source.type === "url") {
+        reportProgressDetail(progress, `Fetching ${source.uri}`);
         await ingestOne(source.uri, () => fetchUrlDocument({ workspacePath, source, url: source.uri, previous: previous.get(stableId("doc", source.id, source.uri)) }));
-        continue;
-      }
-      if (source.type === "website") {
-        for (const url of await crawlWebsite(source)) {
+      } else if (source.type === "website") {
+        reportProgressDetail(progress, `Crawling ${source.uri}`);
+        const urls = await crawlWebsite(source);
+        reportProgressDetail(progress, `Fetched ${urls.length} page${urls.length === 1 ? "" : "s"} from crawl`);
+        for (const url of urls) {
+          reportProgressDetail(progress, `Fetching ${url}`);
           await ingestOne(url, () => fetchUrlDocument({ workspacePath, source, url, previous: previous.get(stableId("doc", source.id, url)) }));
         }
-        continue;
-      }
-      if (source.type === "rss") {
+      } else if (source.type === "rss") {
+        reportProgressDetail(progress, `Fetching feed ${source.uri}`);
         const result = await ingestRssSource({
           workspacePath,
           source,
@@ -236,15 +246,15 @@ export async function ingestSources(
               uri,
               message: error instanceof Error ? error.message : String(error)
             });
+            reportProgressDetail(progress, `Failed ${uri}: ${error instanceof Error ? error.message : String(error)}`);
           }
         });
         added += result.added;
         changed += result.changed;
         unchanged += result.unchanged;
         failed += result.failed;
-        continue;
-      }
-      if (source.type === "markdown" || source.type === "text") {
+      } else if (source.type === "markdown" || source.type === "text") {
+        reportProgressDetail(progress, `Processing inline ${source.type} source ${source.id}`);
         await ingestOne(source.uri, () => ingestInlineContent({
           workspacePath,
           source,
@@ -261,7 +271,12 @@ export async function ingestSources(
         uri: source.uri,
         message: error instanceof Error ? error.message : String(error)
       });
+      reportProgressDetail(progress, `Failed source ${source.name}: ${error instanceof Error ? error.message : String(error)}`);
     }
+    reportProgress(
+      progress,
+      `Finished ${source.name}: +${added - sourceBefore.added} added, ${changed - sourceBefore.changed} changed, ${unchanged - sourceBefore.unchanged} unchanged, ${failed - sourceBefore.failed} failed`
+    );
   }
 
   const expiringDocuments = [...nextDocuments.values()].filter((document) => {
@@ -269,6 +284,7 @@ export async function ingestSources(
     return source ? shouldExpireRssDocument(document, source, defaultRetentionDays) : false;
   });
   if (expiringDocuments.length > 0) {
+    reportProgress(progress, `Removing ${expiringDocuments.length} expired RSS document${expiringDocuments.length === 1 ? "" : "s"}`);
     const expiredIds = new Set(expiringDocuments.map((document) => document.id));
     for (const document of expiringDocuments) {
       nextDocuments.delete(document.id);
@@ -296,6 +312,7 @@ export async function ingestSources(
     documentsSnapshot: documentSnapshot(finalDocuments)
   };
   await writeRun(workspacePath, run);
+  reportProgress(progress, `Ingest complete: ${added} added, ${changed} changed, ${unchanged} unchanged, ${failed} failed`);
   return {
     runId: id,
     documents: { added, changed, unchanged, failed },
@@ -307,11 +324,13 @@ export async function reprocessDocuments(
   {
     workspacePath,
     sourceId,
-    documentId
+    documentId,
+    progress
   }: {
     workspacePath: string;
     sourceId?: string;
     documentId?: string;
+    progress?: ProgressHandler;
   }
 ): Promise<{ runId: string; documentsReprocessed: number; documentsSkipped: number }> {
   const documents = await loadDocuments(workspacePath);
@@ -320,11 +339,16 @@ export async function reprocessDocuments(
   const nextDocuments = new Map(documents.map((document) => [document.id, document]));
   let documentsReprocessed = 0;
   let documentsSkipped = 0;
+  const targets = documents.filter((candidate) => (!sourceId || candidate.sourceId === sourceId) && (!documentId || candidate.id === documentId));
 
-  for (const document of documents.filter((candidate) => (!sourceId || candidate.sourceId === sourceId) && (!documentId || candidate.id === documentId))) {
+  reportProgress(progress, `Reprocessing ${targets.length} document${targets.length === 1 ? "" : "s"}`);
+
+  for (const document of targets) {
+    reportProgressDetail(progress, `Reprocessing ${document.id} (${document.title})`);
     const source = sourceMap.get(document.sourceId);
     if (!source || !document.rawPath || !await fileExists(document.rawPath)) {
       documentsSkipped += 1;
+      reportProgressDetail(progress, `Skipped ${document.id}: raw source not available`);
       continue;
     }
 
@@ -334,6 +358,7 @@ export async function reprocessDocuments(
 
     if (!updated) {
       documentsSkipped += 1;
+      reportProgressDetail(progress, `Skipped ${document.id}: source type could not be reprocessed`);
       continue;
     }
     nextDocuments.set(updated.id, updated);
@@ -354,5 +379,6 @@ export async function reprocessDocuments(
     },
     documentsSnapshot: documentSnapshot(finalDocuments)
   });
+  reportProgress(progress, `Reprocess complete: ${documentsReprocessed} updated, ${documentsSkipped} skipped`);
   return { runId: id, documentsReprocessed, documentsSkipped };
 }

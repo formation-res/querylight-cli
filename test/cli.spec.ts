@@ -133,4 +133,32 @@ describe("cli json output", () => {
     expect(parsed.ok).toBe(true);
     await expect(import("node:fs/promises").then((fs) => fs.stat(denseVectorPath(workspace)))).resolves.toBeDefined();
   });
+
+  it("prints progress by default and suppresses it with --silent", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+
+    await runCli(["init", "--workspace", workspace]);
+    await runCli([
+      "source",
+      "add",
+      "directory",
+      path.resolve("test-fixtures/docs"),
+      "--workspace",
+      workspace,
+      "--name",
+      "Local Docs"
+    ]);
+
+    const rebuild = await runCli(["rebuild", "--workspace", workspace]);
+    expect(rebuild.exitCode).toBe(0);
+    expect(rebuild.stdout).toContain("Processed 1 sources");
+    expect(rebuild.stderr).toContain("Rebuild step 1/3: ingest");
+    expect(rebuild.stderr).toContain("Rebuild complete");
+
+    const silent = await runCli(["rebuild", "--workspace", workspace, "--silent"]);
+    expect(silent.exitCode).toBe(0);
+    expect(silent.stdout).toContain("Processed 1 sources");
+    expect(silent.stderr).toBe("");
+  });
 });

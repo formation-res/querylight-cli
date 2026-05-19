@@ -244,9 +244,11 @@ All commands support:
 --workspace <path>
 --config <path>
 --json
+--silent
 --verbose
---quiet
 ```
+
+Long-running commands print progress to stderr by default. Use `--silent` to suppress progress output. Use `--json` when another tool needs stable structured output.
 
 ### Initialize
 
@@ -307,6 +309,7 @@ qli related https://example.com/docs/auth
 qli ingest
 qli chunk
 qli index build
+qli rebuild --silent
 ```
 
 Run the full pipeline:

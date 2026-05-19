@@ -3,6 +3,7 @@ import path from "node:path";
 import { loadConfig } from "../core/config.js";
 import { sha256 } from "../core/hashing.js";
 import { readJsonl } from "../core/jsonl.js";
+import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
 import type { ChunkRecord, DocumentRecord, IndexMetadata, Source } from "../types/models.js";
 import { buildVectorArtifacts } from "../vector/service.js";
 import { writeIndexArtifacts } from "./index-store.js";
@@ -49,20 +50,24 @@ export async function buildIndex(
     workspacePath,
     denseOverride,
     sparseOverride,
-    buildAvailableModels = false
+    buildAvailableModels = false,
+    progress
   }: {
     workspacePath: string;
     denseOverride?: boolean;
     sparseOverride?: boolean;
     buildAvailableModels?: boolean;
+    progress?: ProgressHandler;
   }
 ): Promise<{ metadata: IndexMetadata; indexPath: string; denseBuilt: boolean; sparseBuilt: boolean }> {
   const config = await loadConfig(workspacePath);
+  reportProgress(progress, "Loading documents, chunks, and sources");
   const chunks = await readJsonl<ChunkRecord>(path.join(workspacePath, "chunks", "chunks.jsonl"));
   const documents = await readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl"));
   const sources = await readJsonl<Source>(path.join(workspacePath, "sources", "sources.jsonl"));
   const metadataFields = [...new Set(chunks.flatMap((chunk) => Object.keys(chunk.metadata).map((key) => `metadata.${key}`)))];
   const index = new DocumentIndex(createIndexMapping(metadataFields));
+  reportProgress(progress, `Building lexical index from ${chunks.length} chunk${chunks.length === 1 ? "" : "s"}`);
 
   for (const chunk of chunks) {
     index.index({
@@ -78,6 +83,7 @@ export async function buildIndex(
       }
     });
   }
+  reportProgressDetail(progress, `Indexed ${documents.length} document${documents.length === 1 ? "" : "s"} across ${sources.length} source${sources.length === 1 ? "" : "s"}`);
 
   const createdAt = new Date().toISOString();
   const metadata: IndexMetadata = {
@@ -91,14 +97,17 @@ export async function buildIndex(
     fields: Object.keys(index.mapping),
     indexHash: sha256(JSON.stringify(index.indexState))
   };
+  reportProgress(progress, "Writing lexical index artifacts");
   const artifacts = await writeIndexArtifacts({ workspacePath, indexState: index.indexState, metadata });
   const vectors = await buildVectorArtifacts({
     workspacePath,
     config,
     denseOverride,
     sparseOverride,
-    buildAvailableModels
+    buildAvailableModels,
+    progress
   });
+  reportProgress(progress, `Index build complete: dense=${Boolean(vectors.dense)}, sparse=${Boolean(vectors.sparse)}`);
   return {
     metadata,
     indexPath: artifacts.indexPath,

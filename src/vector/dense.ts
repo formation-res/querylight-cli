@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { sha256 } from "../core/hashing.js";
 import { readJsonl } from "../core/jsonl.js";
+import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
 import type { ChunkRecord, DenseVectorMetadata, DenseVectorPayload, DenseVectorRecord, RetrievalMode, WorkspaceConfig } from "../types/models.js";
 import { getDenseTransformersRuntime, resolveCacheDir } from "./runtime.js";
 import { writeDensePayload, readDensePayload } from "./store.js";
@@ -38,10 +39,12 @@ export async function pullDenseModel(workspacePath: string, config: WorkspaceCon
 export async function buildDenseVectors(
   {
     workspacePath,
-    config
+    config,
+    progress
   }: {
     workspacePath: string;
     config: WorkspaceConfig["retrieval"]["dense"];
+    progress?: ProgressHandler;
   }
 ): Promise<DenseVectorPayload> {
   const chunks = await readJsonl<ChunkRecord>(path.join(workspacePath, "chunks", "chunks.jsonl"));
@@ -50,6 +53,7 @@ export async function buildDenseVectors(
   const embed = await createEmbedder(cacheDir, config.modelId);
   const records: DenseVectorRecord[] = [];
   let dimensions = 0;
+  reportProgress(progress, `Encoding ${chunks.length} chunk${chunks.length === 1 ? "" : "s"} for dense retrieval`);
 
   for (const chunk of chunks) {
     const embedding = await embed(createDenseChunkText(chunk));
@@ -64,8 +68,12 @@ export async function buildDenseVectors(
       text: chunk.text,
       embedding
     });
+    if (records.length === 1 || records.length % 100 === 0 || records.length === chunks.length) {
+      reportProgressDetail(progress, `Encoded ${records.length}/${chunks.length} chunks for dense retrieval`);
+    }
   }
 
+  reportProgress(progress, "Building dense vector index");
   const index = new VectorFieldIndex({
     numHashTables: config.indexHashTables,
     dimensions,
@@ -89,6 +97,7 @@ export async function buildDenseVectors(
     chunks: records
   };
   await writeDensePayload(workspacePath, payload);
+  reportProgress(progress, `Dense vectors written for ${records.length} chunk${records.length === 1 ? "" : "s"}`);
   return payload;
 }
 

@@ -5,6 +5,7 @@ import { loadConfig } from "../core/config.js";
 import { sha256 } from "../core/hashing.js";
 import { stableId } from "../core/ids.js";
 import { readJsonl } from "../core/jsonl.js";
+import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
 import type { ChunkRecord, DocumentRecord, WorkspaceConfig } from "../types/models.js";
 import { loadChunks, saveChunks } from "./chunk-store.js";
 
@@ -124,16 +125,19 @@ export async function chunkDocuments(
   {
     workspacePath,
     sourceId,
-    documentId
+    documentId,
+    progress
   }: {
     workspacePath: string;
     sourceId?: string;
     documentId?: string;
+    progress?: ProgressHandler;
   }
 ): Promise<{ chunksWritten: number }> {
   const config = await loadConfig(workspacePath);
   const documents = await readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl"));
   const filtered = documents.filter((document) => (!sourceId || document.sourceId === sourceId) && (!documentId || document.id === documentId));
+  reportProgress(progress, `Chunking ${filtered.length} document${filtered.length === 1 ? "" : "s"}`);
   const targetedDocumentIds = new Set(filtered.map((document) => document.id));
   const existingChunks = await loadChunks(workspacePath);
   const prior = new Map(existingChunks.map((chunk) => [chunk.id, chunk]));
@@ -144,6 +148,7 @@ export async function chunkDocuments(
   );
 
   for (const document of filtered) {
+    reportProgressDetail(progress, `Chunking ${document.id} (${document.title})`);
     const raw = await readFile(document.normalizedPath, "utf8");
     for (const chunk of buildChunksForDocument(document, raw, config, prior)) {
       nextChunks.set(chunk.id, chunk);
@@ -151,5 +156,6 @@ export async function chunkDocuments(
   }
 
   await saveChunks(workspacePath, [...nextChunks.values()]);
+  reportProgress(progress, `Chunking complete: ${nextChunks.size} chunk${nextChunks.size === 1 ? "" : "s"} written`);
   return { chunksWritten: nextChunks.size };
 }

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { sha256 } from "../core/hashing.js";
 import { readJsonl } from "../core/jsonl.js";
+import { reportProgress, type ProgressHandler } from "../core/progress.js";
 import type { ChunkRecord, SparseVectorMetadata, SparseVectorPayload, SparseVectorRecord, WorkspaceConfig } from "../types/models.js";
 import { ensureUvAvailable, getDenseTransformersRuntime, resolveCacheDir, runSparsePython } from "./runtime.js";
 import { readSparsePayload, writeSparsePayload } from "./store.js";
@@ -136,14 +137,18 @@ async function buildSparseDocuments(
 export async function buildSparseVectors(
   {
     workspacePath,
-    config
+    config,
+    progress
   }: {
     workspacePath: string;
     config: WorkspaceConfig["retrieval"]["sparse"];
+    progress?: ProgressHandler;
   }
 ): Promise<SparseVectorPayload> {
   const chunks = await readJsonl<ChunkRecord>(path.join(workspacePath, "chunks", "chunks.jsonl"));
+  reportProgress(progress, `Encoding ${chunks.length} chunk${chunks.length === 1 ? "" : "s"} for sparse retrieval`);
   const built = await buildSparseDocuments(workspacePath, config, chunks);
+  reportProgress(progress, "Building sparse vector index");
   const index = new SparseVectorFieldIndex();
   for (const record of built.chunks) {
     index.insert(record.chunkId, [record.vector]);
@@ -165,6 +170,7 @@ export async function buildSparseVectors(
     queryTokenWeights: built.queryTokenWeights
   };
   await writeSparsePayload(workspacePath, payload);
+  reportProgress(progress, `Sparse vectors written for ${built.chunks.length} chunk${built.chunks.length === 1 ? "" : "s"}`);
   return payload;
 }
 
