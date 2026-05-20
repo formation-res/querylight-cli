@@ -14,7 +14,15 @@ import { sparseQuery } from "../vector/sparse.js";
 import { denseVectorPath, sparseVectorPath } from "../vector/store.js";
 
 async function loadHydratedIndex(workspacePath: string): Promise<DocumentIndex> {
-  const state = await readLatestIndexState(workspacePath);
+  let state: object;
+  try {
+    state = await readLatestIndexState(workspacePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new CliError("lexical index is not built; run `qli rebuild` or `qli chunk` followed by `qli index build`", "INDEX_MISSING", ExitCode.QueryError);
+    }
+    throw error;
+  }
   const mapping = createIndexMapping(Object.keys(((state as { fieldState?: Record<string, unknown> }).fieldState ?? {})).filter((field) => field.startsWith("metadata.")));
   return new (await import("@tryformation/querylight-ts")).DocumentIndex(mapping).loadState(state as never);
 }
@@ -562,7 +570,6 @@ export async function searchIndex(
             score: 0,
             title: chooseResultTitle(chunk),
             uri: chunk.uri,
-            headingPath: chunk.headingPath,
             snippet: await buildSnippetWithAdjacentChunks(chunk, document.title, {
               document,
               config,
@@ -631,7 +638,6 @@ export async function searchIndex(
       score,
       title: chooseResultTitle(chunk),
       uri: chunk.uri,
-      headingPath: chunk.headingPath,
       snippet: await buildSnippetWithAdjacentChunks(chunk, normalizedQuery, {
         document: documents.get(chunk.documentId),
         config,

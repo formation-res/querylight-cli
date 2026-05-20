@@ -39,6 +39,8 @@ describe("vector helpers and retrieval", () => {
     const config = await loadConfig(workspacePath);
 
     expect(config.retrieval.defaultMode).toBe("lexical");
+    expect(config.retrieval.dense.enabled).toBe(true);
+    expect(config.retrieval.sparse.enabled).toBe(true);
     expect(config.retrieval.dense.modelId).toBe("Xenova/all-MiniLM-L6-v2");
     expect(config.retrieval.sparse.modelId).toBe("opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill");
     expect(config.retrieval.dense.cacheDir).toBe("~/.qli/models/huggingface");
@@ -189,7 +191,7 @@ describe("vector helpers and retrieval", () => {
     const root = await tempWorkspace("qli-vector-");
     process.env.QLI_HOME = path.join(root, ".qli-home");
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
-    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n", "utf8");
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n  sparse:\n    enabled: false\n", "utf8");
     await writeJsonl(path.join(workspacePath, "sources", "sources.jsonl"), [
       {
         id: "src1",

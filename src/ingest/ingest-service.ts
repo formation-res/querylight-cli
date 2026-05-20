@@ -101,12 +101,14 @@ async function ingestRssSource(
     source,
     previous,
     nextDocuments,
+    onDocumentProcessed,
     onFailure
   }: {
     workspacePath: string;
     source: Source;
     previous: Map<string, DocumentRecord>;
     nextDocuments: Map<string, DocumentRecord>;
+    onDocumentProcessed?: (uri: string, outcome: "added" | "changed" | "unchanged") => void;
     onFailure: (uri: string, error: unknown) => void;
   }
 ): Promise<{
@@ -139,10 +141,13 @@ async function ingestRssSource(
       nextDocuments.set(document.id, document);
       if (!probe) {
         added += 1;
+        onDocumentProcessed?.(item.url, "added");
       } else if (probe.contentHash !== document.contentHash) {
         changed += 1;
+        onDocumentProcessed?.(item.url, "changed");
       } else {
         unchanged += 1;
+        onDocumentProcessed?.(item.url, "unchanged");
       }
     } catch (error) {
       failed += 1;
@@ -186,6 +191,10 @@ export async function ingestSources(
 
   for (const source of sources) {
     const sourceBefore = { added, changed, unchanged, failed };
+    const reportDocumentOutcome = (uri: string, outcome: "added" | "changed" | "unchanged"): void => {
+      const label = outcome === "unchanged" ? "Unchanged" : outcome === "changed" ? "Updated" : "Added";
+      reportProgress(progress, `${label} ${uri}`);
+    };
     const ingestOne = async (uri: string, producer: () => Promise<DocumentRecord>): Promise<void> => {
       try {
         const probeId = stableId("doc", source.id, uri);
@@ -194,10 +203,13 @@ export async function ingestSources(
         nextDocuments.set(document.id, document);
         if (!earlier) {
           added += 1;
+          reportDocumentOutcome(uri, "added");
         } else if (earlier.contentHash !== document.contentHash) {
           changed += 1;
+          reportDocumentOutcome(uri, "changed");
         } else {
           unchanged += 1;
+          reportDocumentOutcome(uri, "unchanged");
         }
       } catch (error) {
         failed += 1;
@@ -213,33 +225,34 @@ export async function ingestSources(
     try {
       reportProgress(progress, `Source ${source.name} (${source.type})`);
       if (source.type === "file") {
-        reportProgressDetail(progress, `Reading file ${source.uri}`);
+        reportProgress(progress, `Reading file ${source.uri}`);
         await ingestOne(source.uri, () => ingestFile({ workspacePath, source, filePath: source.uri, previous: previous.get(stableId("doc", source.id, source.uri)) }));
       } else if (source.type === "directory") {
         const files = await listDirectoryFiles(source);
-        reportProgressDetail(progress, `Scanning ${files.length} file${files.length === 1 ? "" : "s"} from ${source.uri}`);
+        reportProgress(progress, `Scanning ${files.length} file${files.length === 1 ? "" : "s"} from ${source.uri}`);
         for (const filePath of files) {
-          reportProgressDetail(progress, `Reading file ${filePath}`);
+          reportProgress(progress, `Reading file ${filePath}`);
           await ingestOne(filePath, () => ingestFile({ workspacePath, source, filePath, previous: previous.get(stableId("doc", source.id, filePath)) }));
         }
       } else if (source.type === "url") {
-        reportProgressDetail(progress, `Fetching ${source.uri}`);
+        reportProgress(progress, `Fetching ${source.uri}`);
         await ingestOne(source.uri, () => fetchUrlDocument({ workspacePath, source, url: source.uri, previous: previous.get(stableId("doc", source.id, source.uri)) }));
       } else if (source.type === "website") {
-        reportProgressDetail(progress, `Crawling ${source.uri}`);
+        reportProgress(progress, `Crawling ${source.uri}`);
         const urls = await crawlWebsite(source);
-        reportProgressDetail(progress, `Fetched ${urls.length} page${urls.length === 1 ? "" : "s"} from crawl`);
+        reportProgress(progress, `Fetched ${urls.length} page${urls.length === 1 ? "" : "s"} from crawl`);
         for (const url of urls) {
-          reportProgressDetail(progress, `Fetching ${url}`);
+          reportProgress(progress, `Fetching ${url}`);
           await ingestOne(url, () => fetchUrlDocument({ workspacePath, source, url, previous: previous.get(stableId("doc", source.id, url)) }));
         }
       } else if (source.type === "rss") {
-        reportProgressDetail(progress, `Fetching feed ${source.uri}`);
+        reportProgress(progress, `Fetching feed ${source.uri}`);
         const result = await ingestRssSource({
           workspacePath,
           source,
           previous,
           nextDocuments,
+          onDocumentProcessed: reportDocumentOutcome,
           onFailure: (uri, error) => {
             failures.push({
               sourceId: source.id,
@@ -254,7 +267,7 @@ export async function ingestSources(
         unchanged += result.unchanged;
         failed += result.failed;
       } else if (source.type === "markdown" || source.type === "text") {
-        reportProgressDetail(progress, `Processing inline ${source.type} source ${source.id}`);
+        reportProgress(progress, `Processing inline ${source.type} source ${source.id}`);
         await ingestOne(source.uri, () => ingestInlineContent({
           workspacePath,
           source,

@@ -13,12 +13,11 @@ export function formatSourcesTable(sources: Source[]): string {
 export function formatSearchResults(results: SearchResult[]): string {
   return results.map((result, index) => [
     `${index + 1}. ${colors.bold(result.title)}`,
-    `   ${result.uri}`,
-    `   Source type: ${result.sourceType}`,
-    `   Published: ${result.publicationDate ?? "n/a"}`,
-    `   Score: ${result.score.toFixed(3)}`,
-    `   ${result.snippet}`
-  ].join("\n")).join("\n\n");
+    `   URL: ${result.uri}`,
+    `   Source: ${result.sourceType} | Published: ${result.publicationDate ?? "n/a"} | Score: ${result.score.toFixed(3)}`,
+    "",
+    ...result.snippet.split("\n").map((line) => line.length > 0 ? `   ${line}` : "")
+  ].join("\n")).join(`\n\n${colors.dim("---")}\n\n`);
 }
 
 export function formatRelatedDocuments(results: RelatedDocumentResult[]): string {

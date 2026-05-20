@@ -31,7 +31,6 @@ export async function createContext(
       sourceId: result.sourceId,
       title: result.title,
       uri: result.uri,
-      headingPath: result.headingPath,
       text,
       metadata: result.metadata
     });
@@ -44,7 +43,6 @@ export async function createContext(
       `Title: ${source.title}`,
       `URL: ${source.uri}`,
       `Chunk ID: ${source.chunkId}`,
-      source.headingPath.length > 0 ? `Heading Path: ${source.headingPath.join(" > ")}` : "",
       "",
       source.text,
       ""

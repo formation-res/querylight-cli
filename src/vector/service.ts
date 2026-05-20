@@ -5,6 +5,26 @@ import { ensureUvAvailable } from "./runtime.js";
 import { buildSparseVectors, pullSparseModel } from "./sparse.js";
 import { buildModelStatus, readDensePayload, readSparsePayload, writeDensePullMarker, writeSparsePullMarker } from "./store.js";
 
+let pullModelsOverrideForTests: ((args: {
+  workspacePath: string;
+  config: WorkspaceConfig;
+  pullDense: boolean;
+  pullSparse: boolean;
+  progress?: ProgressHandler;
+}) => Promise<void>) | null = null;
+
+export function setPullModelsForTests(
+  override: ((args: {
+    workspacePath: string;
+    config: WorkspaceConfig;
+    pullDense: boolean;
+    pullSparse: boolean;
+    progress?: ProgressHandler;
+  }) => Promise<void>) | null
+): void {
+  pullModelsOverrideForTests = override;
+}
+
 export function resolveModelPullPlan(
   {
     pullDenseFlag,
@@ -25,6 +45,21 @@ export function resolveModelPullPlan(
   return {
     pullDense: true,
     pullSparse: uvAvailable
+  };
+}
+
+export function resolveMissingConfiguredModelPullPlan(
+  {
+    config,
+    status
+  }: {
+    config: WorkspaceConfig;
+    status: Awaited<ReturnType<typeof buildModelStatus>>;
+  }
+): { pullDense: boolean; pullSparse: boolean } {
+  return {
+    pullDense: config.retrieval.dense.enabled && !status.dense.available,
+    pullSparse: config.retrieval.sparse.enabled && status.sparse.uvAvailable && !status.sparse.available
   };
 }
 
@@ -88,6 +123,10 @@ export async function pullModels(
     progress?: ProgressHandler;
   }
 ): Promise<void> {
+  if (pullModelsOverrideForTests) {
+    await pullModelsOverrideForTests({ workspacePath, config, pullDense, pullSparse, progress });
+    return;
+  }
   if (pullDense) {
     reportProgress(progress, `Pulling dense model ${config.retrieval.dense.modelId}`);
     await pullDenseModel(workspacePath, config.retrieval.dense);

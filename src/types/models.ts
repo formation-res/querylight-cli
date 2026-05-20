@@ -235,7 +235,6 @@ export type SearchResult = {
   score: number;
   title: string;
   uri: string;
-  headingPath: string[];
   snippet: string;
   text?: string;
   publicationDate?: string | null;
@@ -276,7 +275,6 @@ export type ContextSource = {
   sourceId: string;
   title: string;
   uri: string;
-  headingPath: string[];
   text: string;
   metadata: Record<string, unknown>;
 };

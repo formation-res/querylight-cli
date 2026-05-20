@@ -37,7 +37,7 @@ export const defaultConfig = (): WorkspaceConfig => ({
   retrieval: {
     defaultMode: "lexical",
     dense: {
-      enabled: false,
+      enabled: true,
       modelId: "Xenova/all-MiniLM-L6-v2",
       cacheDir: DEFAULT_SHARED_MODEL_CACHE_DIR,
       indexHashTables: 8,
@@ -45,7 +45,7 @@ export const defaultConfig = (): WorkspaceConfig => ({
       chunkTextMode: "title-heading-text"
     },
     sparse: {
-      enabled: false,
+      enabled: true,
       modelId: "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill",
       cacheDir: DEFAULT_SHARED_MODEL_CACHE_DIR,
       documentTopTokens: 128,

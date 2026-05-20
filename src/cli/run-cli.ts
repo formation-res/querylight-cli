@@ -19,7 +19,7 @@ import { formatRelatedDocuments, formatSearchResults, formatSourcesTable } from 
 import { listRuns } from "../core/runs.js";
 import { readJsonl } from "../core/jsonl.js";
 import { readLatestIndexMetadata } from "../index/index-store.js";
-import { getModelStatus, pullModels, resolveModelPullPlan } from "../vector/service.js";
+import { getModelStatus, pullModels, resolveMissingConfiguredModelPullPlan, resolveModelPullPlan } from "../vector/service.js";
 import { ensureUvAvailable, resolveCacheDir } from "../vector/runtime.js";
 import type { ProgressHandler, ProgressLevel } from "../core/progress.js";
 
@@ -271,6 +271,49 @@ function createProgressHandler(capture: IoCapture, options: GlobalCliOptions): P
   };
 }
 
+async function runIngestCommand(
+  {
+    workspace,
+    sourceId,
+    changedOnly,
+    dense,
+    sparse,
+    progress
+  }: {
+    workspace: string;
+    sourceId?: string;
+    changedOnly: boolean;
+    dense?: boolean;
+    sparse?: boolean;
+    progress?: ProgressHandler;
+  }
+): Promise<{
+  ingest: Awaited<ReturnType<typeof ingestSources>>;
+  chunk: Awaited<ReturnType<typeof chunkDocuments>>;
+  indexPath: string;
+  metadata: Awaited<ReturnType<typeof buildIndex>>["metadata"];
+}> {
+  progress?.("info", "Ingest step 1/3: fetch and normalize");
+  const ingest = await ingestSources({
+    workspacePath: workspace,
+    sourceIds: sourceId ? [sourceId] : undefined,
+    changedOnly,
+    progress
+  });
+  progress?.("info", "Ingest step 2/3: chunk affected documents");
+  const chunk = await chunkDocuments({ workspacePath: workspace, sourceId, progress });
+  progress?.("info", "Ingest step 3/3: refresh index");
+  const indexBuild = await buildIndex({
+    workspacePath: workspace,
+    denseOverride: dense ? true : undefined,
+    sparseOverride: sparse ? true : undefined,
+    buildAvailableModels: true,
+    progress
+  });
+  progress?.("info", "Ingest complete");
+  return { ingest, chunk, indexPath: indexBuild.indexPath, metadata: indexBuild.metadata };
+}
+
 function parseRetrievalMode(input: string | undefined): RetrievalMode | undefined {
   if (!input) {
     return undefined;
@@ -378,13 +421,13 @@ export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout
 Workflow:
   1. Initialize a workspace with qli init
   2. Register one or more sources with qli source add
-  3. Build or refresh the workspace with qli rebuild
+  3. Refresh the workspace with qli ingest
   4. Query it with qli search, qli related, or qli context
 
 Examples:
   qli init
   qli source add directory ./docs --name "Product Docs" --tag docs
-  qli rebuild
+  qli ingest
   qli rebuild --silent
   qli search "api authentication" --top-k 8
   qli context "How do API keys work?" --top-k 8 --max-chars 8000
@@ -395,16 +438,28 @@ Use --json when another tool needs stable structured output.
 Use qli <command> --help for command-specific options and examples.`);
 
   program.command("init")
-    .description("Create a new workspace with the default directory layout and config.")
+    .description("Create a new workspace with the default directory layout and config, then pull missing retrieval models.")
     .option("--force")
     .addHelpText("after", `
 Examples:
   qli init
   qli init --workspace ./kb
-  qli init --workspace /tmp/querylight --force`)
+  qli init --workspace /tmp/querylight --force
+
+Notes:
+  init enables dense and sparse retrieval in new workspaces.
+  init pulls missing model assets for enabled retrieval modes.
+  Sparse model downloads require uv. If uv is not available, init skips the sparse pull.`)
     .action(async function command(options) {
+      const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: this.optsWithGlobals().workspace });
       const result = await ensureWorkspace({ workspacePath: workspace, force: Boolean(options.force) });
+      const config = await loadConfig(workspace, global.config);
+      const status = await getModelStatus(workspace, config);
+      const { pullDense, pullSparse } = resolveMissingConfiguredModelPullPlan({ config, status });
+      if (pullDense || pullSparse) {
+        await pullModels({ workspacePath: workspace, config, pullDense, pullSparse, progress: createProgressHandler(capture, global) });
+      }
       emit(this.optsWithGlobals().json, capture, response("init", workspace, result), `Initialized workspace at ${workspace}`);
     });
 
@@ -618,25 +673,30 @@ Examples:
   });
 
   program.command("ingest")
-    .description("Fetch and normalize source content into workspace documents.")
+    .description("Fetch source content, update affected chunks, and refresh retrieval indexes.")
     .option("--source <sourceId>", "Only ingest one source.")
     .option("--changed-only", "Skip content that has not changed since the last run.")
+    .option("--dense", "Force a dense vector build if the dense model is available.")
+    .option("--sparse", "Force a sparse vector build if the sparse runtime is available.")
     .addHelpText("after", `
 Examples:
   qli ingest
   qli ingest --source src_123
   qli ingest --changed-only
+  qli ingest --dense --sparse
   qli ingest --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
-      const result = await ingestSources({
-        workspacePath: workspace,
-        sourceIds: options.source ? [options.source] : undefined,
+      const result = await runIngestCommand({
+        workspace,
+        sourceId: options.source,
         changedOnly: Boolean(options.changedOnly),
+        dense: Boolean(options.dense),
+        sparse: Boolean(options.sparse),
         progress: createProgressHandler(capture, global)
       });
-      emit(global.json, capture, response("ingest", workspace, result), `Ingested ${result.processedSources} sources`);
+      emit(global.json, capture, response("ingest", workspace, result), `Processed ${result.ingest.processedSources} sources, wrote ${result.chunk.chunksWritten} chunks`);
     });
 
   program.command("chunk")

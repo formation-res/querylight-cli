@@ -86,6 +86,8 @@ Initialize a workspace:
 qli init
 ```
 
+`qli init` creates the workspace config, enables dense and sparse retrieval for new workspaces, and pulls missing model assets when the runtime is available.
+
 Add a local docs directory:
 
 ```bash
@@ -95,7 +97,7 @@ qli source add directory ./docs --name "Local Docs" --tag docs
 Build the knowledge base:
 
 ```bash
-qli rebuild
+qli ingest
 ```
 
 Search it:
@@ -169,10 +171,10 @@ qli source add website https://querylight.tryformation.com \
 `qli source add website` may also detect one blog or news feed and register it as a separate `rss` source. Use `--json` when another tool needs the full list of created sources.
 Use `qli source add page` for one page. Use `qli source add website` when you want crawling or feed detection.
 
-5. Build the local index:
+5. Ingest content and refresh the local index:
 
 ```bash
-qli rebuild
+qli ingest
 ```
 
 6. Inspect and query the result:
@@ -212,7 +214,7 @@ The default workspace is `.kb/`.
   logs/
 ```
 
-Vector model downloads are shared across workspaces under `~/.qli/models/` by default.
+Vector model downloads are shared across workspaces under `~/.qli/models/` by default. `qli init` pulls missing model assets for enabled retrieval modes, so a new workspace is ready for vector indexing after setup.
 
 Use a custom workspace with:
 
@@ -324,7 +326,9 @@ qli index build
 qli rebuild --silent
 ```
 
-Run the full pipeline:
+`qli ingest` fetches source content, updates affected chunks, and refreshes the index.
+
+Use `qli rebuild` when you want the explicit full pipeline command:
 
 ```bash
 qli rebuild

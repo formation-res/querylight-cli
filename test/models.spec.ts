@@ -2,7 +2,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureWorkspace } from "../src/core/workspace.js";
 import { runCli } from "../src/cli/run-cli.js";
-import { resolveModelPullPlan } from "../src/vector/service.js";
+import { loadConfig } from "../src/core/config.js";
+import { resolveMissingConfiguredModelPullPlan, resolveModelPullPlan } from "../src/vector/service.js";
+import { buildModelStatus } from "../src/vector/store.js";
 import { writeDensePullMarker, writeSparsePullMarker } from "../src/vector/store.js";
 import { cleanupTempDirs, tempWorkspace } from "./helpers.js";
 
@@ -40,6 +42,28 @@ describe("model commands", () => {
     })).toEqual({
       pullDense: false,
       pullSparse: true
+    });
+  });
+
+  it("pulls missing configured models only", async () => {
+    const root = await tempWorkspace("qli-models-");
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+    await ensureWorkspace({ workspacePath: workspace });
+    const config = await loadConfig(workspace);
+
+    const missingStatus = await buildModelStatus(workspace, config.retrieval.dense, config.retrieval.sparse, false);
+    expect(resolveMissingConfiguredModelPullPlan({ config, status: missingStatus })).toEqual({
+      pullDense: true,
+      pullSparse: false
+    });
+
+    await writeDensePullMarker(workspace, config.retrieval.dense, { pulledAt: "2026-05-18T00:00:00.000Z" });
+    await writeSparsePullMarker(workspace, config.retrieval.sparse, { pulledAt: "2026-05-18T00:00:00.000Z" });
+    const availableStatus = await buildModelStatus(workspace, config.retrieval.dense, config.retrieval.sparse, true);
+    expect(resolveMissingConfiguredModelPullPlan({ config, status: availableStatus })).toEqual({
+      pullDense: false,
+      pullSparse: false
     });
   });
 

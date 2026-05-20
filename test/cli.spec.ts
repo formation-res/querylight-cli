@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../src/cli/run-cli.js";
 import { setDenseEmbedderFactoryForTests } from "../src/vector/dense.js";
+import { setPullModelsForTests } from "../src/vector/service.js";
 import { denseVectorPath, writeDensePullMarker } from "../src/vector/store.js";
 
 const tempDirs: string[] = [];
@@ -33,6 +34,7 @@ describe("cli json output", () => {
     expect(init.exitCode).toBe(0);
     expect(initParsed.ok).toBe(true);
     expect(initParsed.command).toBe("init");
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
 
     const add = await runCli([
       "source",
@@ -50,10 +52,10 @@ describe("cli json output", () => {
     const addParsed = JSON.parse(add.stdout);
     expect(addParsed.ok).toBe(true);
 
-    const rebuild = await runCli(["rebuild", "--workspace", workspace, "--json"]);
-    const rebuildParsed = JSON.parse(rebuild.stdout);
-    expect(rebuildParsed.ok).toBe(true);
-    expect(rebuildParsed.data.indexPath).toContain("indexes");
+    const ingest = await runCli(["ingest", "--workspace", workspace, "--json"]);
+    const ingestParsed = JSON.parse(ingest.stdout);
+    expect(ingestParsed.ok).toBe(true);
+    expect(ingestParsed.data.indexPath).toContain("indexes");
 
     const search = await runCli(["search", "authentication", "--workspace", workspace, "--json"]);
     const searchParsed = JSON.parse(search.stdout);
@@ -76,7 +78,7 @@ describe("cli json output", () => {
     setDenseEmbedderFactoryForTests(async () => async (text) => fakeDenseEmbedding(text));
 
     await runCli(["init", "--workspace", workspace]);
-    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n", "utf8");
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n  sparse:\n    enabled: false\n", "utf8");
     await runCli([
       "source",
       "add",
@@ -116,6 +118,7 @@ describe("cli json output", () => {
     setDenseEmbedderFactoryForTests(async () => async () => [1, 1, 1]);
 
     await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n  sparse:\n    enabled: false\n", "utf8");
     await writeDensePullMarker(workspace, {
       modelId: "Xenova/all-MiniLM-L6-v2",
       cacheDir: "~/.qli/models/huggingface"
@@ -141,12 +144,33 @@ describe("cli json output", () => {
     await expect(import("node:fs/promises").then((fs) => fs.stat(denseVectorPath(workspace)))).resolves.toBeDefined();
   });
 
+  it("init pulls missing retrieval models for enabled modes", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    const pulls: Array<{ pullDense: boolean; pullSparse: boolean; workspacePath: string }> = [];
+    setPullModelsForTests(async ({ workspacePath, pullDense, pullSparse }) => {
+      pulls.push({ workspacePath, pullDense, pullSparse });
+    });
+
+    const init = await runCli(["init", "--workspace", workspace, "--json"]);
+    const parsed = JSON.parse(init.stdout);
+
+    expect(init.exitCode).toBe(0);
+    expect(parsed.ok).toBe(true);
+    expect(pulls).toHaveLength(1);
+    expect(pulls[0]?.workspacePath).toBe(workspace);
+    expect(pulls[0]?.pullDense).toBe(true);
+  });
+
   it("prints progress by default and suppresses it with --silent", async () => {
     const root = await tempWorkspace();
     const workspace = path.join(root, ".kb");
     process.env.QLI_HOME = path.join(root, ".qli-home");
 
     await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     await runCli([
       "source",
       "add",
@@ -158,15 +182,98 @@ describe("cli json output", () => {
       "Local Docs"
     ]);
 
+    const ingest = await runCli(["ingest", "--workspace", workspace]);
+    expect(ingest.exitCode).toBe(0);
+    expect(ingest.stdout).toContain("Processed 1 sources");
+    expect(ingest.stderr).toContain("Ingest step 1/3: fetch and normalize");
+    expect(ingest.stderr).toContain("Ingest step 2/3: chunk affected documents");
+    expect(ingest.stderr).toContain("Ingest step 3/3: refresh index");
+    expect(ingest.stderr).toContain("Ingesting 1 source");
+    expect(ingest.stderr).toContain("Source Local Docs (directory)");
+    expect(ingest.stderr).toContain("Scanning ");
+    expect(ingest.stderr).toContain("Reading file");
+    expect(ingest.stderr).toContain("Added ");
+    expect(ingest.stderr).toContain("Finished Local Docs:");
+    expect(ingest.stderr).toContain("Chunking complete:");
+    expect(ingest.stderr).toContain("Index build complete:");
+
+    const ingestSilent = await runCli(["ingest", "--workspace", workspace, "--silent"]);
+    expect(ingestSilent.exitCode).toBe(0);
+    expect(ingestSilent.stdout).toContain("Processed 1 sources");
+    expect(ingestSilent.stderr).toBe("");
+
     const rebuild = await runCli(["rebuild", "--workspace", workspace]);
     expect(rebuild.exitCode).toBe(0);
     expect(rebuild.stdout).toContain("Processed 1 sources");
     expect(rebuild.stderr).toContain("Rebuild step 1/3: ingest");
+    expect(rebuild.stderr).toContain("Scanning ");
+    expect(rebuild.stderr).toContain("Reading file");
+    expect(rebuild.stderr).toContain("Unchanged ");
+    expect(rebuild.stderr).toContain("Finished Local Docs:");
     expect(rebuild.stderr).toContain("Rebuild complete");
 
     const silent = await runCli(["rebuild", "--workspace", workspace, "--silent"]);
     expect(silent.exitCode).toBe(0);
     expect(silent.stdout).toContain("Processed 1 sources");
     expect(silent.stderr).toBe("");
+  });
+
+  it("search works after ingest without a separate rebuild", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
+    await runCli([
+      "source",
+      "add",
+      "directory",
+      path.resolve("test-fixtures/docs"),
+      "--workspace",
+      workspace,
+      "--name",
+      "Local Docs"
+    ]);
+    await runCli(["ingest", "--workspace", workspace]);
+
+    const search = await runCli(["search", "authentication", "--workspace", workspace, "--json"]);
+    const parsed = JSON.parse(search.stdout);
+
+    expect(search.exitCode).toBe(0);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.data.results.length).toBeGreaterThan(0);
+  });
+
+  it("renders search results with separators and omits heading breadcrumbs", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
+    await runCli([
+      "source",
+      "add",
+      "directory",
+      path.resolve("test-fixtures/docs"),
+      "--workspace",
+      workspace,
+      "--name",
+      "Local Docs"
+    ]);
+    await runCli(["ingest", "--workspace", workspace]);
+
+    const search = await runCli(["search", "authentication", "--workspace", workspace]);
+    expect(search.exitCode).toBe(0);
+    expect(search.stdout).toContain("1.");
+    expect(search.stdout).toContain("API Authentication");
+    expect(search.stdout).toContain("URL: ");
+    expect(search.stdout).toContain("Source: directory | Published: n/a | Score:");
+    expect(search.stdout).not.toContain("Heading Path:");
+
+    const jsonSearch = await runCli(["search", "authentication", "--workspace", workspace, "--json"]);
+    const parsed = JSON.parse(jsonSearch.stdout);
+    expect(parsed.data.results[0]).not.toHaveProperty("headingPath");
   });
 });
