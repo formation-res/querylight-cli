@@ -166,6 +166,8 @@ qli source add website https://querylight.tryformation.com \
   --tag docs
 ```
 
+`qli source add website` may also detect one blog or news feed and register it as a separate `rss` source. Use `--json` when another tool needs the full list of created sources.
+
 5. Build the local index:
 
 ```bash
@@ -267,8 +269,11 @@ qli source add file ./docs/guide.md --name "Guide"
 qli source add directory ./docs --name "Docs" --tag docs
 qli source add url https://example.com/docs/auth --name "Auth Page"
 qli source add website https://example.com --name "Example Site" --max-depth 2 --max-pages 50
+qli source add website https://example.com --name "Example Site" --json
 qli source add rss https://example.com/feed.xml --name "Release Feed"
 ```
+
+Website sources may detect one blog or news feed during registration. When qli can infer a shared article prefix such as `/blog/` or `/news/`, it adds that prefix to the website source excludes to reduce duplicate ingestion.
 
 List and manage them:
 

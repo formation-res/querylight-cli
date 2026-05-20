@@ -8,6 +8,7 @@ import { CliError, ExitCode } from "../core/errors.js";
 import { assertWorkspaceExists, ensureWorkspace } from "../core/workspace.js";
 import { buildIndex } from "../index/querylight-indexer.js";
 import { ingestSources, reprocessDocuments } from "../ingest/ingest-service.js";
+import { discoverWebsiteFeed, type WebsiteFeedDiscovery } from "../ingest/adapters/website-feed-discovery.js";
 import { searchIndex } from "../query/search-service.js";
 import { findRelatedDocuments } from "../query/related-service.js";
 import { createContext } from "../query/context-builder.js";
@@ -54,6 +55,18 @@ type SourceConfigOptions = {
   retentionDays?: string;
 };
 
+type WebsiteSourceAddResult = {
+  primarySource: Source;
+  addedSources: Source[];
+  detectedFeed: {
+    url: string;
+    discoveredBy: WebsiteFeedDiscovery["discoveredBy"];
+    excludePrefix?: string;
+    source?: Source;
+    wasAdded: boolean;
+  } | null;
+};
+
 function parseKeyValue(input: string): [string, string] {
   const idx = input.indexOf("=");
   if (idx <= 0) {
@@ -81,6 +94,33 @@ function setWhenDefined<T extends object, K extends keyof T>(target: T, key: K, 
   if (value !== undefined) {
     target[key] = value;
   }
+}
+
+function mergePatterns(existing: string[] | undefined, extra: string | undefined): string[] | undefined {
+  const merged = [...(existing ?? [])];
+  if (extra && !merged.includes(extra)) {
+    merged.push(extra);
+  }
+  return merged.length > 0 ? merged : undefined;
+}
+
+function formatWebsiteSourceAdd(result: WebsiteSourceAddResult): string {
+  const lines = [`Added source ${result.primarySource.id}`];
+  if (!result.detectedFeed) {
+    lines.push("No feed detected during website registration.");
+    return lines.join("\n");
+  }
+  if (result.detectedFeed.source && result.detectedFeed.wasAdded) {
+    lines.push(`Detected feed ${result.detectedFeed.url} and added source ${result.detectedFeed.source.id}.`);
+  } else if (result.detectedFeed.source) {
+    lines.push(`Detected feed ${result.detectedFeed.url}. Source ${result.detectedFeed.source.id} already exists.`);
+  } else {
+    lines.push(`Detected feed ${result.detectedFeed.url}.`);
+  }
+  if (result.detectedFeed.excludePrefix) {
+    lines.push(`Excluded ${result.detectedFeed.excludePrefix} from the website crawl.`);
+  }
+  return lines.join("\n");
 }
 
 function createSourceCrawlConfig(type: SourceType, options: Record<string, unknown>, defaults: { retentionDays: number }): CrawlConfig | undefined {
@@ -340,7 +380,7 @@ Examples:
   source
     .description("Register, inspect, and manage workspace sources.");
   source.command("add")
-    .description("Add a source definition. The source is enabled immediately.")
+    .description("Add a source definition. The source is enabled immediately. Website sources may auto-detect one feed and add it as a separate RSS source.")
     .argument("<type>", `Source type: ${SOURCE_TYPE_LIST.join(", ")}`)
     .argument("<uri>", "Local path, URL, feed URL, or inline content depending on the source type.")
     .requiredOption("--name <name>")
@@ -360,10 +400,14 @@ Examples:
   qli source add file ./docs/auth.md --name "Auth Guide"
   qli source add url https://example.com/docs/auth --name "Auth Page"
   qli source add website https://example.com --name "Docs Site" --max-depth 2 --max-pages 50 --include /docs/
+  qli source add website https://example.com --name "Example Site" --json
   qli source add rss https://example.com/feed.xml --name "Release Feed"
   qli source add rss https://example.com/feed.xml --name "Release Feed" --retention-days 30
 
 Notes:
+  Website sources may detect one blog or news feed during registration.
+  When a feed is added, qli also excludes the feed item prefix from the website crawl when it can infer one.
+  Use --json when automation needs the full list of created sources.
   RSS sources store retention per feed.
   When you omit --retention-days for RSS, qli stores the workspace default from config.yaml.`)
     .action(async function command(type: SourceType, uri: string, options) {
@@ -374,7 +418,18 @@ Notes:
       const workspace = await resolveWorkspace({ workspace: global.workspace });
       const config = await loadConfig(workspace, global.config);
       const now = new Date().toISOString();
-      const crawl = createSourceCrawlConfig(type, options, { retentionDays: config.crawler.retentionDays });
+      const initialCrawl = createSourceCrawlConfig(type, options, { retentionDays: config.crawler.retentionDays });
+      let crawl = initialCrawl;
+      let detectedFeed: WebsiteFeedDiscovery | null = null;
+      if (type === "website") {
+        detectedFeed = await discoverWebsiteFeed(uri, config.crawler.defaultUserAgent);
+        if (detectedFeed?.excludePrefix) {
+          crawl = {
+            ...(crawl ?? {}),
+            excludePatterns: mergePatterns(crawl?.excludePatterns, detectedFeed.excludePrefix)
+          };
+        }
+      }
       const stored = await addSource(workspace, {
         type,
         uri: ["file", "directory"].includes(type) ? path.resolve(uri) : uri,
@@ -386,7 +441,49 @@ Notes:
         createdAt: now,
         updatedAt: now
       });
-      emit(global.json, capture, response("source add", workspace, stored), `Added source ${stored.id}`);
+      if (type !== "website") {
+        emit(global.json, capture, response("source add", workspace, stored), `Added source ${stored.id}`);
+        return;
+      }
+
+      let feedSource: Source | undefined;
+      let feedWasAdded = false;
+      if (detectedFeed) {
+        const existingSources = await listSources(workspace);
+        feedSource = existingSources.find((source) => source.uri === detectedFeed?.feedUrl);
+        if (!feedSource) {
+          feedSource = await addSource(workspace, {
+            type: "rss",
+            uri: detectedFeed.feedUrl,
+            name: `${options.name} Feed`,
+            enabled: true,
+            tags: options.tag ?? [],
+            metadata: normalizeMetadata(options.metadata),
+            crawl: {
+              retentionDays: config.crawler.retentionDays,
+              fetchArticles: true
+            },
+            createdAt: now,
+            updatedAt: now
+          });
+          feedWasAdded = true;
+        }
+      }
+
+      const result: WebsiteSourceAddResult = {
+        primarySource: stored,
+        addedSources: [stored, ...(feedWasAdded && feedSource ? [feedSource] : [])],
+        detectedFeed: detectedFeed
+          ? {
+              url: detectedFeed.feedUrl,
+              discoveredBy: detectedFeed.discoveredBy,
+              excludePrefix: detectedFeed.excludePrefix,
+              source: feedSource,
+              wasAdded: feedWasAdded
+            }
+          : null
+      };
+      emit(global.json, capture, response("source add", workspace, result), formatWebsiteSourceAdd(result));
     });
 
   source.command("config")

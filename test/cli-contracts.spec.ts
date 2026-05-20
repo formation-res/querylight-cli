@@ -1,12 +1,29 @@
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/cli/run-cli.js";
+import { readJsonl } from "../src/core/jsonl.js";
+import type { Source } from "../src/types/models.js";
 import { cleanupTempDirs, tempWorkspace } from "./helpers.js";
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await cleanupTempDirs();
 });
+
+function websiteHtml(feedLinks: string[] = []): string {
+  const links = feedLinks
+    .map((href) => `<link rel="alternate" type="application/rss+xml" href="${href}">`)
+    .join("");
+  return `<!doctype html><html><head><title>Example</title>${links}</head><body><h1>Example</h1></body></html>`;
+}
+
+function rssFeed(itemUrls: string[]): string {
+  const items = itemUrls
+    .map((url, index) => `<item><title>Item ${index + 1}</title><link>${url}</link><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item>`)
+    .join("");
+  return `<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title>${items}</channel></rss>`;
+}
 
 describe("cli contracts", () => {
   it("returns structured json errors for invalid metadata arguments", async () => {
@@ -113,5 +130,202 @@ describe("cli contracts", () => {
     const doctorParsed = JSON.parse(doctor.stdout);
     expect(doctorParsed.ok).toBe(true);
     expect(doctorParsed.data.checks).toContain("config parses");
+  });
+
+  it("auto-adds a declared feed for website sources and returns a composite payload", async () => {
+    const root = await tempWorkspace("qli-cli-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/") {
+        return new Response(websiteHtml(["/feed.xml"]), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/feed.xml") {
+        return new Response(rssFeed([
+          "https://example.com/blog/post-one",
+          "https://example.com/blog/post-two"
+        ]), { status: 200, headers: { "content-type": "application/rss+xml" } });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const added = await runCli([
+      "source",
+      "add",
+      "website",
+      "https://example.com/",
+      "--workspace",
+      workspace,
+      "--name",
+      "Example Site",
+      "--json"
+    ]);
+    const parsed = JSON.parse(added.stdout);
+
+    expect(parsed.data.primarySource.type).toBe("website");
+    expect(parsed.data.addedSources).toHaveLength(2);
+    expect(parsed.data.detectedFeed.url).toBe("https://example.com/feed.xml");
+    expect(parsed.data.detectedFeed.excludePrefix).toBe("/blog/");
+
+    const sources = await readJsonl<Source>(path.join(workspace, "sources", "sources.jsonl"));
+    expect(sources).toHaveLength(2);
+    expect(sources.find((source) => source.type === "website")?.crawl?.excludePatterns).toContain("/blog/");
+    expect(sources.find((source) => source.type === "rss")?.uri).toBe("https://example.com/feed.xml");
+  });
+
+  it("falls back to common feed paths when no declared feed link exists", async () => {
+    const root = await tempWorkspace("qli-cli-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/") {
+        return new Response(websiteHtml(), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/feed") {
+        return new Response(rssFeed([
+          "https://example.com/news/post-one",
+          "https://example.com/news/post-two"
+        ]), { status: 200, headers: { "content-type": "application/rss+xml" } });
+      }
+      return new Response("not found", { status: 404, headers: { "content-type": "text/plain" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const added = await runCli([
+      "source",
+      "add",
+      "website",
+      "https://example.com/",
+      "--workspace",
+      workspace,
+      "--name",
+      "Example Site",
+      "--json"
+    ]);
+    const parsed = JSON.parse(added.stdout);
+
+    expect(parsed.data.detectedFeed.url).toBe("https://example.com/feed");
+    expect(parsed.data.detectedFeed.discoveredBy).toBe("common");
+  });
+
+  it("chooses the highest-ranked feed when multiple plausible feeds exist", async () => {
+    const root = await tempWorkspace("qli-cli-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/") {
+        return new Response(websiteHtml(["/blog/feed.xml", "/feed.xml"]), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/feed.xml") {
+        return new Response(rssFeed([
+          "https://example.com/blog/post-one",
+          "https://example.com/blog/post-two"
+        ]), { status: 200, headers: { "content-type": "application/rss+xml" } });
+      }
+      if (url === "https://example.com/blog/feed.xml") {
+        return new Response(rssFeed([
+          "https://example.com/blog/post-three",
+          "https://example.com/blog/post-four"
+        ]), { status: 200, headers: { "content-type": "application/rss+xml" } });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const added = await runCli([
+      "source",
+      "add",
+      "website",
+      "https://example.com/",
+      "--workspace",
+      workspace,
+      "--name",
+      "Example Site",
+      "--json"
+    ]);
+    const parsed = JSON.parse(added.stdout);
+
+    expect(parsed.data.detectedFeed.url).toBe("https://example.com/feed.xml");
+    expect(parsed.data.addedSources).toHaveLength(2);
+  });
+
+  it("does not add an exclusion prefix when feed item URLs do not share a stable path prefix", async () => {
+    const root = await tempWorkspace("qli-cli-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/") {
+        return new Response(websiteHtml(["/feed.xml"]), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/feed.xml") {
+        return new Response(rssFeed([
+          "https://example.com/alpha/post-one",
+          "https://example.com/beta/post-two"
+        ]), { status: 200, headers: { "content-type": "application/rss+xml" } });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const added = await runCli([
+      "source",
+      "add",
+      "website",
+      "https://example.com/",
+      "--workspace",
+      workspace,
+      "--name",
+      "Example Site",
+      "--json"
+    ]);
+    const parsed = JSON.parse(added.stdout);
+
+    expect(parsed.data.detectedFeed.excludePrefix).toBeUndefined();
+    const sources = await readJsonl<Source>(path.join(workspace, "sources", "sources.jsonl"));
+    expect(sources.find((source) => source.type === "website")?.crawl?.excludePatterns ?? []).toEqual([]);
+  });
+
+  it("ignores invalid common feed URLs without failing website registration", async () => {
+    const root = await tempWorkspace("qli-cli-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/") {
+        return new Response(websiteHtml(), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/feed") {
+        return new Response("<html>not a feed</html>", { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return new Response("not found", { status: 404, headers: { "content-type": "text/plain" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const added = await runCli([
+      "source",
+      "add",
+      "website",
+      "https://example.com/",
+      "--workspace",
+      workspace,
+      "--name",
+      "Example Site",
+      "--json"
+    ]);
+    const parsed = JSON.parse(added.stdout);
+
+    expect(parsed.data.primarySource.type).toBe("website");
+    expect(parsed.data.addedSources).toHaveLength(1);
+    expect(parsed.data.detectedFeed).toBeNull();
   });
 });
