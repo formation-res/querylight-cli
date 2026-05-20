@@ -39,7 +39,7 @@ type GlobalCliOptions = {
 
 const SOURCE_TYPES = new Set<SourceType>(["url", "website", "rss", "file", "directory", "markdown", "text"]);
 const RETRIEVAL_MODES = new Set<RetrievalMode>(["lexical", "dense", "sparse", "hybrid"]);
-const SOURCE_TYPE_LIST = ["url", "website", "rss", "file", "directory", "markdown", "text"] as const;
+const SOURCE_TYPE_LIST = ["page", "website", "rss", "file", "directory", "markdown", "text"] as const;
 const RETRIEVAL_MODE_LIST = ["lexical", "dense", "sparse", "hybrid"] as const;
 const SEARCH_DATE_FIELDS = ["publicationDate", "firstSeenAt", "lastSeenAt", "lastChangedAt", "crawledAt"] as const;
 
@@ -149,6 +149,37 @@ function createSourceCrawlConfig(type: SourceType, options: Record<string, unkno
   return Object.keys(crawl).length > 0 ? crawl : undefined;
 }
 
+function validateSourceAddOptions(type: SourceType, options: Record<string, unknown>): void {
+  const reject = (optionName: string): never => {
+    throw new CliError(`${optionName} is not supported for source type ${type}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  };
+
+  if (options.maxDepth !== undefined && type !== "website") {
+    reject("--max-depth");
+  }
+  if (options.maxPages !== undefined && type !== "website") {
+    reject("--max-pages");
+  }
+  if (options.renderJs && type !== "website") {
+    reject("--render-js");
+  }
+  if (options.robots === false && type !== "website") {
+    reject("--no-robots");
+  }
+  if (options.rateLimitMs !== undefined && type !== "website") {
+    reject("--rate-limit-ms");
+  }
+  if (options.include !== undefined && !["website", "directory"].includes(type)) {
+    reject("--include");
+  }
+  if (options.exclude !== undefined && !["website", "directory"].includes(type)) {
+    reject("--exclude");
+  }
+  if (options.retentionDays !== undefined && type !== "rss") {
+    reject("--retention-days");
+  }
+}
+
 function allowedSourceConfigFields(source: Source): Set<string> {
   const fields = new Set<string>(["name", "tag", "metadata"]);
   if (source.type === "rss") {
@@ -254,10 +285,11 @@ function parseSourceType(input: string | undefined): SourceType | undefined {
   if (!input) {
     return undefined;
   }
-  if (!SOURCE_TYPES.has(input as SourceType)) {
+  const normalized = input === "page" ? "url" : input;
+  if (!SOURCE_TYPES.has(normalized as SourceType)) {
     throw new CliError(`unsupported source type: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
   }
-  return input as SourceType;
+  return normalized as SourceType;
 }
 
 function parseCommaSeparatedList(input: string | undefined): string[] | undefined {
@@ -380,7 +412,7 @@ Examples:
   source
     .description("Register, inspect, and manage workspace sources.");
   source.command("add")
-    .description("Add a source definition. The source is enabled immediately. Website sources may auto-detect one feed and add it as a separate RSS source.")
+    .description("Add a source definition. The source is enabled immediately. Use `page` for one page and `website` for multi-page crawling and feed detection.")
     .argument("<type>", `Source type: ${SOURCE_TYPE_LIST.join(", ")}`)
     .argument("<uri>", "Local path, URL, feed URL, or inline content depending on the source type.")
     .requiredOption("--name <name>")
@@ -398,22 +430,28 @@ Examples:
 Examples:
   qli source add directory ./docs --name "Local Docs" --tag docs
   qli source add file ./docs/auth.md --name "Auth Guide"
-  qli source add url https://example.com/docs/auth --name "Auth Page"
+  qli source add page https://example.com/docs/auth --name "Auth Page"
   qli source add website https://example.com --name "Docs Site" --max-depth 2 --max-pages 50 --include /docs/
   qli source add website https://example.com --name "Example Site" --json
   qli source add rss https://example.com/feed.xml --name "Release Feed"
   qli source add rss https://example.com/feed.xml --name "Release Feed" --retention-days 30
 
 Notes:
+  page stores one page. It does not crawl links or detect feeds.
   Website sources may detect one blog or news feed during registration.
   When a feed is added, qli also excludes the feed item prefix from the website crawl when it can infer one.
   Use --json when automation needs the full list of created sources.
   RSS sources store retention per feed.
   When you omit --retention-days for RSS, qli stores the workspace default from config.yaml.`)
-    .action(async function command(type: SourceType, uri: string, options) {
+    .action(async function command(typeInput: string, uri: string, options) {
+      const type = parseSourceType(typeInput);
+      if (!type) {
+        throw new CliError(`unsupported source type: ${typeInput}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+      }
       if (!SOURCE_TYPES.has(type)) {
         throw new CliError(`unsupported source type: ${type}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
       }
+      validateSourceAddOptions(type, options);
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
       const config = await loadConfig(workspace, global.config);
@@ -742,7 +780,7 @@ Examples:
   qli search --source-name "Release Feed,Company Blog" --uri-prefix https://example.com/news,https://example.com/blog
   qli search "billing" --metadata team=support
   qli search "embedding model" --retrieval hybrid --show-chunks
-  qli search --source-type rss,url --top-k 25 --json
+  qli search --source-type rss,page --top-k 25 --json
 
 Notes:
   lexical works without vector models.

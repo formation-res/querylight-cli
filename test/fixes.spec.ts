@@ -46,6 +46,54 @@ describe("targeted regressions", () => {
     expect(parsed.error.code).toBe("INVALID_ARGUMENT");
   });
 
+  it("source add rejects website-only crawl flags on url sources", async () => {
+    const root = await tempWorkspace("qli-type-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const result = await runCli([
+      "source",
+      "add",
+      "url",
+      "https://example.com",
+      "--workspace",
+      workspace,
+      "--name",
+      "Example",
+      "--max-depth",
+      "3",
+      "--json"
+    ]);
+
+    expect(result.exitCode).toBe(2);
+    const parsed = JSON.parse(result.stderr);
+    expect(parsed.error.code).toBe("INVALID_ARGUMENT");
+    expect(parsed.error.message).toContain("--max-depth is not supported for source type url");
+  });
+
+  it("source add accepts page as an alias for url", async () => {
+    const root = await tempWorkspace("qli-type-");
+    const workspace = path.join(root, ".kb");
+    await runCli(["init", "--workspace", workspace]);
+
+    const result = await runCli([
+      "source",
+      "add",
+      "page",
+      "https://example.com/docs/auth",
+      "--workspace",
+      workspace,
+      "--name",
+      "Auth Page",
+      "--json"
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.data.type).toBe("url");
+    expect(parsed.data.uri).toBe("https://example.com/docs/auth");
+  });
+
   it("diff since compares against the most recent run before the timestamp", async () => {
     const root = await tempWorkspace("qli-diff-");
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
