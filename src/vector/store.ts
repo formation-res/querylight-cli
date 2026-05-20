@@ -2,14 +2,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { DenseVectorPayload, ModelStatusResponse, SparseVectorPayload } from "../types/models.js";
 import { fileExists } from "../core/files.js";
-import { resolveCacheDir } from "./runtime.js";
+import { sha256 } from "../core/hashing.js";
+import { resolveCacheDir, resolveQliHomeDir } from "./runtime.js";
 
 function vectorsDir(workspacePath: string): string {
   return path.join(workspacePath, "vectors");
 }
 
-function modelsDir(workspacePath: string): string {
-  return path.join(workspacePath, "models");
+function sharedModelStateDir(): string {
+  return path.join(resolveQliHomeDir(), "models", "status");
 }
 
 export function denseVectorPath(workspacePath: string): string {
@@ -28,12 +29,23 @@ export function sparseMetaPath(workspacePath: string): string {
   return path.join(vectorsDir(workspacePath), "sparse.latest.meta.json");
 }
 
-function densePullMarker(workspacePath: string): string {
-  return path.join(modelsDir(workspacePath), "dense.pulled.json");
+function pullMarkerPath(
+  type: "dense" | "sparse",
+  workspacePath: string,
+  modelId: string,
+  cacheDir: string
+): string {
+  const resolvedCacheDir = resolveCacheDir(workspacePath, cacheDir);
+  const cacheKey = sha256(resolvedCacheDir).slice(0, 16);
+  return path.join(sharedModelStateDir(), type, `${encodeURIComponent(modelId)}.${cacheKey}.json`);
 }
 
-function sparsePullMarker(workspacePath: string): string {
-  return path.join(modelsDir(workspacePath), "sparse.pulled.json");
+function densePullMarker(workspacePath: string, modelId: string, cacheDir: string): string {
+  return pullMarkerPath("dense", workspacePath, modelId, cacheDir);
+}
+
+function sparsePullMarker(workspacePath: string, modelId: string, cacheDir: string): string {
+  return pullMarkerPath("sparse", workspacePath, modelId, cacheDir);
 }
 
 export async function writeDensePayload(workspacePath: string, payload: DenseVectorPayload): Promise<void> {
@@ -56,14 +68,24 @@ export async function readSparsePayload(workspacePath: string): Promise<SparseVe
   return JSON.parse(await readFile(sparseVectorPath(workspacePath), "utf8")) as SparseVectorPayload;
 }
 
-export async function writeDensePullMarker(workspacePath: string, value: object): Promise<void> {
-  await mkdir(modelsDir(workspacePath), { recursive: true });
-  await writeFile(densePullMarker(workspacePath), JSON.stringify(value, null, 2), "utf8");
+export async function writeDensePullMarker(
+  workspacePath: string,
+  model: { modelId: string; cacheDir: string },
+  value: object
+): Promise<void> {
+  const markerPath = densePullMarker(workspacePath, model.modelId, model.cacheDir);
+  await mkdir(path.dirname(markerPath), { recursive: true });
+  await writeFile(markerPath, JSON.stringify(value, null, 2), "utf8");
 }
 
-export async function writeSparsePullMarker(workspacePath: string, value: object): Promise<void> {
-  await mkdir(modelsDir(workspacePath), { recursive: true });
-  await writeFile(sparsePullMarker(workspacePath), JSON.stringify(value, null, 2), "utf8");
+export async function writeSparsePullMarker(
+  workspacePath: string,
+  model: { modelId: string; cacheDir: string },
+  value: object
+): Promise<void> {
+  const markerPath = sparsePullMarker(workspacePath, model.modelId, model.cacheDir);
+  await mkdir(path.dirname(markerPath), { recursive: true });
+  await writeFile(markerPath, JSON.stringify(value, null, 2), "utf8");
 }
 
 export async function buildModelStatus(
@@ -79,7 +101,7 @@ export async function buildModelStatus(
       configured: dense.enabled,
       modelId: dense.modelId,
       cacheDir: denseCacheDir,
-      available: await fileExists(densePullMarker(workspacePath)),
+      available: await fileExists(densePullMarker(workspacePath, dense.modelId, dense.cacheDir)),
       artifactExists: await fileExists(denseVectorPath(workspacePath))
     },
     sparse: {
@@ -87,7 +109,7 @@ export async function buildModelStatus(
       modelId: sparse.modelId,
       cacheDir: sparseCacheDir,
       uvAvailable,
-      available: await fileExists(sparsePullMarker(workspacePath)),
+      available: await fileExists(sparsePullMarker(workspacePath, sparse.modelId, sparse.cacheDir)),
       artifactExists: await fileExists(sparseVectorPath(workspacePath))
     }
   };

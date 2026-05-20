@@ -91,18 +91,20 @@ export async function pullModels(
   if (pullDense) {
     reportProgress(progress, `Pulling dense model ${config.retrieval.dense.modelId}`);
     await pullDenseModel(workspacePath, config.retrieval.dense);
-    await writeDensePullMarker(workspacePath, {
+    await writeDensePullMarker(workspacePath, config.retrieval.dense, {
       pulledAt: new Date().toISOString(),
-      modelId: config.retrieval.dense.modelId
+      modelId: config.retrieval.dense.modelId,
+      cacheDir: config.retrieval.dense.cacheDir
     });
     reportProgress(progress, `Dense model ready: ${config.retrieval.dense.modelId}`);
   }
   if (pullSparse) {
     reportProgress(progress, `Pulling sparse model ${config.retrieval.sparse.modelId}`);
     await pullSparseModel(workspacePath, config.retrieval.sparse);
-    await writeSparsePullMarker(workspacePath, {
+    await writeSparsePullMarker(workspacePath, config.retrieval.sparse, {
       pulledAt: new Date().toISOString(),
-      modelId: config.retrieval.sparse.modelId
+      modelId: config.retrieval.sparse.modelId,
+      cacheDir: config.retrieval.sparse.cacheDir
     });
     reportProgress(progress, `Sparse model ready: ${config.retrieval.sparse.modelId}`);
   }

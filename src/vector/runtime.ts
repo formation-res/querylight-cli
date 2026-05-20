@@ -1,10 +1,27 @@
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync } from "node:child_process";
 import type { DenseVectorModelConfig, SparseVectorModelConfig } from "../types/models.js";
 import { fileExists } from "../core/files.js";
 
+export function resolveQliHomeDir(): string {
+  return path.resolve(process.env.QLI_HOME ?? path.join(os.homedir(), ".qli"));
+}
+
 export function resolveCacheDir(workspacePath: string, configuredPath: string): string {
+  if (configuredPath === "~/.qli") {
+    return resolveQliHomeDir();
+  }
+  if (configuredPath.startsWith("~/.qli/")) {
+    return path.join(resolveQliHomeDir(), configuredPath.slice("~/.qli/".length));
+  }
+  if (configuredPath === "~") {
+    return os.homedir();
+  }
+  if (configuredPath.startsWith("~/")) {
+    return path.join(os.homedir(), configuredPath.slice(2));
+  }
   return path.isAbsolute(configuredPath) ? configuredPath : path.resolve(workspacePath, configuredPath.replace(/^\.kb\//, ""));
 }
 

@@ -27,18 +27,21 @@ afterEach(async () => {
   setDenseEmbedderFactoryForTests(null);
   setSparseDocumentBuilderFactoryForTests(null);
   setSparseQueryEncoderFactoryForTests(null);
+  delete process.env.QLI_HOME;
   await cleanupTempDirs();
 });
 
 describe("vector helpers and retrieval", () => {
   it("includes retrieval defaults in config", async () => {
     const root = await tempWorkspace("qli-vector-");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
     const config = await loadConfig(workspacePath);
 
     expect(config.retrieval.defaultMode).toBe("lexical");
     expect(config.retrieval.dense.modelId).toBe("Xenova/all-MiniLM-L6-v2");
     expect(config.retrieval.sparse.modelId).toBe("opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill");
+    expect(config.retrieval.dense.cacheDir).toBe("~/.qli/models/huggingface");
   });
 
   it("builds dense and sparse chunk text from title heading and body", () => {
@@ -64,6 +67,7 @@ describe("vector helpers and retrieval", () => {
 
   it("builds dense and sparse vector artifacts and searches all retrieval modes", async () => {
     const root = await tempWorkspace("qli-vector-");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
     await writeJsonl(path.join(workspacePath, "sources", "sources.jsonl"), [
       {
@@ -183,6 +187,7 @@ describe("vector helpers and retrieval", () => {
 
   it("finds related documents from dense document embeddings", async () => {
     const root = await tempWorkspace("qli-vector-");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
     await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n", "utf8");
     await writeJsonl(path.join(workspacePath, "sources", "sources.jsonl"), [

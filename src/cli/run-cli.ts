@@ -20,7 +20,7 @@ import { listRuns } from "../core/runs.js";
 import { readJsonl } from "../core/jsonl.js";
 import { readLatestIndexMetadata } from "../index/index-store.js";
 import { getModelStatus, pullModels, resolveModelPullPlan } from "../vector/service.js";
-import { ensureUvAvailable } from "../vector/runtime.js";
+import { ensureUvAvailable, resolveCacheDir } from "../vector/runtime.js";
 import type { ProgressHandler, ProgressLevel } from "../core/progress.js";
 
 type IoCapture = {
@@ -831,6 +831,7 @@ Examples:
   qli models pull --sparse
   qli models pull --silent
 
+Pulled model assets are shared under ~/.qli by default.
 If you plan to use related, dense search, or hybrid retrieval, pull the models and rebuild the index first.`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
@@ -844,18 +845,32 @@ If you plan to use related, dense search, or hybrid retrieval, pull the models a
       });
       await pullModels({ workspacePath: workspace, config, pullDense, pullSparse, progress: createProgressHandler(capture, global) });
       const data = {
-        dense: pullDense ? { pulled: true, modelId: config.retrieval.dense.modelId, cacheDir: config.retrieval.dense.cacheDir } : undefined,
-        sparse: pullSparse ? { pulled: true, modelId: config.retrieval.sparse.modelId, cacheDir: config.retrieval.sparse.cacheDir } : undefined
+        dense: pullDense
+          ? {
+              pulled: true,
+              modelId: config.retrieval.dense.modelId,
+              cacheDir: resolveCacheDir(workspace, config.retrieval.dense.cacheDir)
+            }
+          : undefined,
+        sparse: pullSparse
+          ? {
+              pulled: true,
+              modelId: config.retrieval.sparse.modelId,
+              cacheDir: resolveCacheDir(workspace, config.retrieval.sparse.cacheDir)
+            }
+          : undefined
       };
       emit(global.json, capture, response("models pull", workspace, data), "Pulled available models");
     });
 
   models.command("status")
-    .description("Show whether model runtimes and artifacts are available in the workspace.")
+    .description("Show whether shared model assets, runtimes, and workspace vector artifacts are available.")
     .addHelpText("after", `
 Examples:
   qli models status
-  qli models status --json`)
+  qli models status --json
+
+The cacheDir fields show the resolved model cache path for the current workspace config.`)
     .action(async function command() {
     const global = this.optsWithGlobals();
     const workspace = await resolveWorkspace({ workspace: global.workspace });

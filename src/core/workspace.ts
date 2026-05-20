@@ -11,8 +11,6 @@ const DIRS = [
   "normalized",
   "indexes",
   "vectors",
-  "models",
-  "models/huggingface",
   "runs",
   "logs"
 ] as const;

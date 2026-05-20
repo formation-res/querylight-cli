@@ -16,6 +16,7 @@ async function tempWorkspace(): Promise<string> {
 
 afterEach(async () => {
   setDenseEmbedderFactoryForTests(null);
+  delete process.env.QLI_HOME;
   await Promise.all(tempDirs.splice(0).map(async (dir) => {
     await import("node:fs/promises").then((fs) => fs.rm(dir, { recursive: true, force: true }));
   }));
@@ -25,6 +26,7 @@ describe("cli json output", () => {
   it("returns stable command envelopes", async () => {
     const root = await tempWorkspace();
     const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
     const init = await runCli(["init", "--workspace", workspace, "--json"]);
     const initParsed = JSON.parse(init.stdout);
 
@@ -62,6 +64,7 @@ describe("cli json output", () => {
   it("returns related documents from the CLI", async () => {
     const root = await tempWorkspace();
     const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
     const fakeDenseEmbedding = (text: string): number[] => {
       const lower = text.toLowerCase();
       return [
@@ -109,10 +112,14 @@ describe("cli json output", () => {
   it("rebuild auto-builds dense vectors when the model is already available", async () => {
     const root = await tempWorkspace();
     const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
     setDenseEmbedderFactoryForTests(async () => async () => [1, 1, 1]);
 
     await runCli(["init", "--workspace", workspace]);
-    await writeDensePullMarker(workspace, { pulledAt: "2026-05-18T00:00:00.000Z" });
+    await writeDensePullMarker(workspace, {
+      modelId: "Xenova/all-MiniLM-L6-v2",
+      cacheDir: "~/.qli/models/huggingface"
+    }, { pulledAt: "2026-05-18T00:00:00.000Z" });
     await runCli([
       "source",
       "add",
@@ -137,6 +144,7 @@ describe("cli json output", () => {
   it("prints progress by default and suppresses it with --silent", async () => {
     const root = await tempWorkspace();
     const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
 
     await runCli(["init", "--workspace", workspace]);
     await runCli([

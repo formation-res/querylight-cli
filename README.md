@@ -211,6 +211,8 @@ The default workspace is `.kb/`.
   logs/
 ```
 
+Vector model downloads are shared across workspaces under `~/.qli/models/` by default.
+
 Use a custom workspace with:
 
 ```bash
@@ -300,6 +302,8 @@ Or pull every model that is available on the current machine:
 ```bash
 qli models pull
 ```
+
+By default, `qli models pull` stores model assets in `~/.qli/models/` so multiple workspaces can reuse them.
 
 Then ask for documents related to an existing document id or URI:
 
