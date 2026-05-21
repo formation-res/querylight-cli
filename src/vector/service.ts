@@ -1,7 +1,7 @@
 import type { DenseVectorPayload, SparseVectorPayload, WorkspaceConfig } from "../types/models.js";
 import { reportProgress, type ProgressHandler } from "../core/progress.js";
 import { buildDenseVectors, pullDenseModel } from "./dense.js";
-import { ensureUvAvailable } from "./runtime.js";
+import { isUvAvailable } from "./runtime.js";
 import { buildSparseVectors, pullSparseModel } from "./sparse.js";
 import { buildModelStatus, readDensePayload, readSparsePayload, writeDensePullMarker, writeSparsePullMarker } from "./store.js";
 
@@ -80,26 +80,23 @@ export async function buildVectorArtifacts(
     progress?: ProgressHandler;
   }
 ): Promise<{ dense?: DenseVectorPayload; sparse?: SparseVectorPayload }> {
+  const uvAvailable = await isUvAvailable();
   const modelStatus = buildAvailableModels
-    ? await buildModelStatus(workspacePath, config.retrieval.dense, config.retrieval.sparse, await (async () => {
-        try {
-          await ensureUvAvailable();
-          return true;
-        } catch {
-          return false;
-        }
-      })())
+    ? await buildModelStatus(workspacePath, config.retrieval.dense, config.retrieval.sparse, uvAvailable)
     : null;
   const denseEnabled = denseOverride ?? (buildAvailableModels
     ? (config.retrieval.dense.enabled || Boolean(modelStatus?.dense.available))
     : config.retrieval.dense.enabled);
   const sparseEnabled = sparseOverride ?? (buildAvailableModels
     ? ((config.retrieval.sparse.enabled || Boolean(modelStatus?.sparse.available)) && Boolean(modelStatus?.sparse.uvAvailable))
-    : config.retrieval.sparse.enabled);
+    : (config.retrieval.sparse.enabled && uvAvailable));
   const result: { dense?: DenseVectorPayload; sparse?: SparseVectorPayload } = {};
   if (denseEnabled) {
     reportProgress(progress, `Building dense vectors with ${config.retrieval.dense.modelId}`);
     result.dense = await buildDenseVectors({ workspacePath, config: config.retrieval.dense, progress });
+  }
+  if ((sparseOverride || config.retrieval.sparse.enabled) && !uvAvailable) {
+    reportProgress(progress, "Skipping sparse vectors because uv is not available");
   }
   if (sparseEnabled) {
     reportProgress(progress, `Building sparse vectors with ${config.retrieval.sparse.modelId}`);
@@ -150,12 +147,6 @@ export async function pullModels(
 }
 
 export async function getModelStatus(workspacePath: string, config: WorkspaceConfig) {
-  let uvAvailable = false;
-  try {
-    await ensureUvAvailable();
-    uvAvailable = true;
-  } catch {
-    uvAvailable = false;
-  }
+  const uvAvailable = await isUvAvailable();
   return buildModelStatus(workspacePath, config.retrieval.dense, config.retrieval.sparse, uvAvailable);
 }

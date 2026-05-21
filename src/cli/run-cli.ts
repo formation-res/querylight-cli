@@ -20,7 +20,7 @@ import { listRuns } from "../core/runs.js";
 import { readJsonl } from "../core/jsonl.js";
 import { readLatestIndexMetadata } from "../index/index-store.js";
 import { getModelStatus, pullModels, resolveMissingConfiguredModelPullPlan, resolveModelPullPlan } from "../vector/service.js";
-import { ensureUvAvailable, resolveCacheDir } from "../vector/runtime.js";
+import { ensureUvAvailable, isUvAvailable, resolveCacheDir } from "../vector/runtime.js";
 import type { ProgressHandler, ProgressLevel } from "../core/progress.js";
 
 type IoCapture = {
@@ -1128,8 +1128,11 @@ Examples:
       checks.push("dense runtime importable");
     }
     if (config.retrieval.sparse.enabled) {
-      await ensureUvAvailable();
-      checks.push("uv available for sparse runtime");
+      if (await isUvAvailable()) {
+        checks.push("uv available for sparse runtime");
+      } else {
+        checks.push("uv missing for sparse runtime");
+      }
     }
     try {
       await readLatestIndexMetadata(workspace);

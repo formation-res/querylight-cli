@@ -49,6 +49,15 @@ export async function ensureUvAvailable(): Promise<void> {
   });
 }
 
+export async function isUvAvailable(): Promise<boolean> {
+  try {
+    await ensureUvAvailable();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function runSparsePython(
   {
     workspacePath,
