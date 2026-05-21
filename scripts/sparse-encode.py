@@ -88,7 +88,11 @@ def encode_documents(model_id: str, top_tokens: int, documents):
 
 
 def main():
-    payload = json.load(sys.stdin)
+    if len(sys.argv) > 1:
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            payload = json.load(handle)
+    else:
+        payload = json.load(sys.stdin)
     action = payload["action"]
     model_id = payload["model_id"]
     if action == "download_only":

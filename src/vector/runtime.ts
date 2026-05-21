@@ -2,8 +2,23 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { DenseVectorModelConfig, SparseVectorModelConfig } from "../types/models.js";
 import { fileExists } from "../core/files.js";
+
+type SparseExecOptions = {
+  encoding: BufferEncoding;
+  maxBuffer: number;
+  env: NodeJS.ProcessEnv;
+};
+
+type SparseExecFileSync = (file: string, args: string[], options: SparseExecOptions) => string;
+
+let sparseExecFileSync: SparseExecFileSync = execFileSync as SparseExecFileSync;
+
+export function setSparseExecFileSyncForTests(fn: SparseExecFileSync | null): void {
+  sparseExecFileSync = fn ?? (execFileSync as SparseExecFileSync);
+}
 
 export function resolveQliHomeDir(): string {
   return path.resolve(process.env.QLI_HOME ?? path.join(os.homedir(), ".qli"));
@@ -73,29 +88,36 @@ export async function runSparsePython(
 ): Promise<string> {
   const cacheDir = resolveCacheDir(workspacePath, config.cacheDir);
   const scriptPath = await sparseScriptPath(importMetaUrl);
-  return execFileSync(
-    "uv",
-    [
-      "run",
-      "--with",
-      "torch",
-      "--with",
-      "transformers",
-      "--with",
-      "huggingface_hub",
-      "python",
-      scriptPath
-    ],
-    {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 1024,
-      input: JSON.stringify(payload),
-      env: {
-        ...process.env,
-        HF_HOME: cacheDir
+  const payloadDir = await mkdtemp(path.join(os.tmpdir(), "qli-sparse-"));
+  const payloadPath = path.join(payloadDir, "payload.json");
+  await writeFile(payloadPath, JSON.stringify(payload), "utf8");
+  try {
+    return sparseExecFileSync(
+      "uv",
+      [
+        "run",
+        "--with",
+        "torch",
+        "--with",
+        "transformers",
+        "--with",
+        "huggingface_hub",
+        "python",
+        scriptPath,
+        payloadPath
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 1024,
+        env: {
+          ...process.env,
+          HF_HOME: cacheDir
+        }
       }
-    }
-  );
+    );
+  } finally {
+    await rm(payloadDir, { recursive: true, force: true });
+  }
 }
 
 export async function getDenseTransformersRuntime(cacheDir: string): Promise<{
