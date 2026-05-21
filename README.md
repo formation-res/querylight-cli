@@ -208,8 +208,8 @@ The default workspace is `.kb/`.
   raw/
   normalized/
   indexes/
-    latest.json
-    latest.meta.json
+    latest.json.gz
+    latest.meta.json.gz
   runs/
   logs/
 ```

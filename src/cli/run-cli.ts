@@ -18,7 +18,7 @@ import type { CommandResponse, CrawlConfig, Metadata, RetrievalMode, Source, Sou
 import { formatRelatedDocuments, formatSearchResults, formatSourcesTable } from "./format.js";
 import { listRuns } from "../core/runs.js";
 import { readJsonl } from "../core/jsonl.js";
-import { readLatestIndexMetadata } from "../index/index-store.js";
+import { readLatestIndexMetadata, resolveLatestIndexArtifactPath } from "../index/index-store.js";
 import { getModelStatus, pullModels, resolveMissingConfiguredModelPullPlan, resolveModelPullPlan } from "../vector/service.js";
 import { ensureUvAvailable, isUvAvailable, resolveCacheDir } from "../vector/runtime.js";
 import type { ProgressHandler, ProgressLevel } from "../core/progress.js";
@@ -1075,7 +1075,7 @@ Examples:
     try {
       const meta = await readLatestIndexMetadata(workspace);
       latestIndex = meta.createdAt;
-      indexSize = (await stat(`${workspace}/indexes/latest.json`)).size;
+      indexSize = (await stat(await resolveLatestIndexArtifactPath(workspace))).size;
     } catch {
       latestIndex = undefined;
     }

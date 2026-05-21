@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildIndex } from "../src/index/querylight-indexer.js";
 import { chunkDocuments } from "../src/chunk/chunker.js";
@@ -128,12 +129,55 @@ describe("ingest, chunk, index, query", () => {
     ]);
 
     const build = await buildIndex({ workspacePath });
-    const latest = JSON.parse(await readFile(path.join(workspacePath, "indexes", "latest.json"), "utf8")) as object;
+    const latest = JSON.parse(gunzipSync(await readFile(path.join(workspacePath, "indexes", "latest.json.gz"))).toString("utf8")) as object;
     expect(latest).toBeTruthy();
 
     const search = await searchIndex({ workspacePath, query: "bearer token", topK: 5 });
     expect(search.results[0]?.chunkId).toBe("chunk1");
     expect(build.metadata.indexHash.length).toBeGreaterThan(10);
+  });
+
+  it("reads a legacy json index and upgrades it to gzip on rebuild", async () => {
+    const root = await tempWorkspace();
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
+    await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
+      {
+        id: "chunk1",
+        documentId: "doc1",
+        sourceId: "src1",
+        title: "Auth",
+        uri: "file:///auth.md",
+        headingPath: ["API Authentication"],
+        text: "Use the Authorization Bearer token header.",
+        tokenEstimate: 6,
+        contentHash: "hash1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    await buildIndex({ workspacePath });
+    const legacyIndex = gunzipSync(await readFile(path.join(workspacePath, "indexes", "latest.json.gz"))).toString("utf8");
+    const legacyMeta = gunzipSync(await readFile(path.join(workspacePath, "indexes", "latest.meta.json.gz"))).toString("utf8");
+    await writeFile(path.join(workspacePath, "indexes", "latest.json"), legacyIndex, "utf8");
+    await writeFile(path.join(workspacePath, "indexes", "latest.meta.json"), legacyMeta, "utf8");
+    await Promise.all([
+      rm(path.join(workspacePath, "indexes", "latest.json.gz"), { force: true }),
+      rm(path.join(workspacePath, "indexes", "latest.meta.json.gz"), { force: true })
+    ]);
+
+    const search = await searchIndex({ workspacePath, query: "bearer token", topK: 5 });
+    expect(search.results[0]?.chunkId).toBe("chunk1");
+
+    await buildIndex({ workspacePath });
+
+    await expect(stat(path.join(workspacePath, "indexes", "latest.json.gz"))).resolves.toBeDefined();
+    await expect(stat(path.join(workspacePath, "indexes", "latest.meta.json.gz"))).resolves.toBeDefined();
+    await expect(stat(path.join(workspacePath, "indexes", "latest.json"))).rejects.toThrow();
+    await expect(stat(path.join(workspacePath, "indexes", "latest.meta.json"))).rejects.toThrow();
   });
 
   it("prefers a specific article page over an aggregate page when both match", async () => {

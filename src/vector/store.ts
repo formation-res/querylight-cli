@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { DenseVectorPayload, ModelStatusResponse, SparseVectorPayload } from "../types/models.js";
 import { fileExists } from "../core/files.js";
+import { readJsonFromGzipOrFile, writeGzipJson } from "../core/gzip-json.js";
 import { sha256 } from "../core/hashing.js";
 import { resolveCacheDir, resolveQliHomeDir } from "./runtime.js";
 
@@ -14,18 +15,34 @@ function sharedModelStateDir(): string {
 }
 
 export function denseVectorPath(workspacePath: string): string {
-  return path.join(vectorsDir(workspacePath), "dense.latest.json");
+  return path.join(vectorsDir(workspacePath), "dense.latest.json.gz");
 }
 
 export function denseMetaPath(workspacePath: string): string {
-  return path.join(vectorsDir(workspacePath), "dense.latest.meta.json");
+  return path.join(vectorsDir(workspacePath), "dense.latest.meta.json.gz");
 }
 
 export function sparseVectorPath(workspacePath: string): string {
-  return path.join(vectorsDir(workspacePath), "sparse.latest.json");
+  return path.join(vectorsDir(workspacePath), "sparse.latest.json.gz");
 }
 
 export function sparseMetaPath(workspacePath: string): string {
+  return path.join(vectorsDir(workspacePath), "sparse.latest.meta.json.gz");
+}
+
+function legacyDenseVectorPath(workspacePath: string): string {
+  return path.join(vectorsDir(workspacePath), "dense.latest.json");
+}
+
+function legacyDenseMetaPath(workspacePath: string): string {
+  return path.join(vectorsDir(workspacePath), "dense.latest.meta.json");
+}
+
+function legacySparseVectorPath(workspacePath: string): string {
+  return path.join(vectorsDir(workspacePath), "sparse.latest.json");
+}
+
+function legacySparseMetaPath(workspacePath: string): string {
   return path.join(vectorsDir(workspacePath), "sparse.latest.meta.json");
 }
 
@@ -50,22 +67,30 @@ function sparsePullMarker(workspacePath: string, modelId: string, cacheDir: stri
 
 export async function writeDensePayload(workspacePath: string, payload: DenseVectorPayload): Promise<void> {
   await mkdir(vectorsDir(workspacePath), { recursive: true });
-  await writeFile(denseVectorPath(workspacePath), JSON.stringify(payload, null, 2), "utf8");
-  await writeFile(denseMetaPath(workspacePath), JSON.stringify(payload.metadata, null, 2), "utf8");
+  await writeGzipJson(denseVectorPath(workspacePath), payload);
+  await writeGzipJson(denseMetaPath(workspacePath), payload.metadata);
+  await Promise.all([
+    rm(legacyDenseVectorPath(workspacePath), { force: true }),
+    rm(legacyDenseMetaPath(workspacePath), { force: true })
+  ]);
 }
 
 export async function readDensePayload(workspacePath: string): Promise<DenseVectorPayload> {
-  return JSON.parse(await readFile(denseVectorPath(workspacePath), "utf8")) as DenseVectorPayload;
+  return readJsonFromGzipOrFile<DenseVectorPayload>(denseVectorPath(workspacePath), legacyDenseVectorPath(workspacePath));
 }
 
 export async function writeSparsePayload(workspacePath: string, payload: SparseVectorPayload): Promise<void> {
   await mkdir(vectorsDir(workspacePath), { recursive: true });
-  await writeFile(sparseVectorPath(workspacePath), JSON.stringify(payload, null, 2), "utf8");
-  await writeFile(sparseMetaPath(workspacePath), JSON.stringify(payload.metadata, null, 2), "utf8");
+  await writeGzipJson(sparseVectorPath(workspacePath), payload);
+  await writeGzipJson(sparseMetaPath(workspacePath), payload.metadata);
+  await Promise.all([
+    rm(legacySparseVectorPath(workspacePath), { force: true }),
+    rm(legacySparseMetaPath(workspacePath), { force: true })
+  ]);
 }
 
 export async function readSparsePayload(workspacePath: string): Promise<SparseVectorPayload> {
-  return JSON.parse(await readFile(sparseVectorPath(workspacePath), "utf8")) as SparseVectorPayload;
+  return readJsonFromGzipOrFile<SparseVectorPayload>(sparseVectorPath(workspacePath), legacySparseVectorPath(workspacePath));
 }
 
 export async function writeDensePullMarker(
@@ -102,7 +127,7 @@ export async function buildModelStatus(
       modelId: dense.modelId,
       cacheDir: denseCacheDir,
       available: await fileExists(densePullMarker(workspacePath, dense.modelId, dense.cacheDir)),
-      artifactExists: await fileExists(denseVectorPath(workspacePath))
+      artifactExists: await fileExists(denseVectorPath(workspacePath)) || await fileExists(legacyDenseVectorPath(workspacePath))
     },
     sparse: {
       configured: sparse.enabled,
@@ -110,7 +135,7 @@ export async function buildModelStatus(
       cacheDir: sparseCacheDir,
       uvAvailable,
       available: await fileExists(sparsePullMarker(workspacePath, sparse.modelId, sparse.cacheDir)),
-      artifactExists: await fileExists(sparseVectorPath(workspacePath))
+      artifactExists: await fileExists(sparseVectorPath(workspacePath)) || await fileExists(legacySparseVectorPath(workspacePath))
     }
   };
 }
