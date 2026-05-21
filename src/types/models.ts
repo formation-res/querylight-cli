@@ -14,6 +14,7 @@ export type RetrievalMode = "lexical" | "dense" | "sparse" | "hybrid";
 export type CrawlConfig = {
   maxDepth?: number;
   maxPages?: number;
+  maxConcurrentRequests?: number;
   includePatterns?: string[];
   excludePatterns?: string[];
   obeyRobotsTxt?: boolean;
@@ -201,6 +202,7 @@ export type WorkspaceConfig = {
     defaultUserAgent: string;
     obeyRobotsTxt: boolean;
     rateLimitMs: number;
+    maxConcurrentRequests: number;
     renderJs: boolean;
     retentionDays: number;
     fetchArticles: boolean;

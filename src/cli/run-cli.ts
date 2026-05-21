@@ -26,6 +26,8 @@ import type { ProgressHandler, ProgressLevel } from "../core/progress.js";
 type IoCapture = {
   stdout: string[];
   stderr: string[];
+  onStdout?: (value: string) => void;
+  onStderr?: (value: string) => void;
 };
 
 type GlobalCliOptions = {
@@ -50,6 +52,7 @@ type SourceConfigOptions = {
   metadata?: string[];
   maxDepth?: string;
   maxPages?: string;
+  maxConcurrentRequests?: string;
   include?: string[];
   exclude?: string[];
   retentionDays?: string;
@@ -86,6 +89,17 @@ function parseOptionalNumber(input: string | undefined, optionName: string): num
   const value = Number(input);
   if (!Number.isFinite(value)) {
     throw new CliError(`invalid number for ${optionName}: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return value;
+}
+
+function parseOptionalPositiveInteger(input: string | undefined, optionName: string): number | undefined {
+  const value = parseOptionalNumber(input, optionName);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || value < 1) {
+    throw new CliError(`invalid positive integer for ${optionName}: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
   }
   return value;
 }
@@ -130,6 +144,7 @@ function createSourceCrawlConfig(type: SourceType, options: Record<string, unkno
   const crawl: CrawlConfig = {};
   setWhenDefined(crawl, "maxDepth", parseOptionalNumber(options.maxDepth as string | undefined, "--max-depth"));
   setWhenDefined(crawl, "maxPages", parseOptionalNumber(options.maxPages as string | undefined, "--max-pages"));
+  setWhenDefined(crawl, "maxConcurrentRequests", parseOptionalPositiveInteger(options.maxConcurrentRequests as string | undefined, "--max-concurrent-requests"));
   setWhenDefined(crawl, "includePatterns", options.include as string[] | undefined);
   setWhenDefined(crawl, "excludePatterns", options.exclude as string[] | undefined);
   setWhenDefined(crawl, "obeyRobotsTxt", options.robots as boolean | undefined);
@@ -160,6 +175,9 @@ function validateSourceAddOptions(type: SourceType, options: Record<string, unkn
   if (options.maxPages !== undefined && type !== "website") {
     reject("--max-pages");
   }
+  if (options.maxConcurrentRequests !== undefined && !["website", "rss"].includes(type)) {
+    reject("--max-concurrent-requests");
+  }
   if (options.renderJs && type !== "website") {
     reject("--render-js");
   }
@@ -184,10 +202,12 @@ function allowedSourceConfigFields(source: Source): Set<string> {
   const fields = new Set<string>(["name", "tag", "metadata"]);
   if (source.type === "rss") {
     fields.add("retentionDays");
+    fields.add("maxConcurrentRequests");
   }
   if (source.type === "website") {
     fields.add("maxDepth");
     fields.add("maxPages");
+    fields.add("maxConcurrentRequests");
     fields.add("include");
     fields.add("exclude");
   }
@@ -226,6 +246,10 @@ function buildSourceConfigPatch(source: Source, options: SourceConfigOptions): P
     checkAllowed("maxPages", "--max-pages");
     crawlPatch.maxPages = parseOptionalNumber(options.maxPages, "--max-pages");
   }
+  if (options.maxConcurrentRequests !== undefined) {
+    checkAllowed("maxConcurrentRequests", "--max-concurrent-requests");
+    crawlPatch.maxConcurrentRequests = parseOptionalPositiveInteger(options.maxConcurrentRequests, "--max-concurrent-requests");
+  }
   if (options.include !== undefined) {
     checkAllowed("include", "--include");
     crawlPatch.includePatterns = options.include;
@@ -257,6 +281,11 @@ function response<T>(command: string, workspace: string, data?: T, error?: Comma
 
 function writeOutput(capture: IoCapture, value: string, stderr = false): void {
   (stderr ? capture.stderr : capture.stdout).push(value);
+  if (stderr) {
+    capture.onStderr?.(value);
+    return;
+  }
+  capture.onStdout?.(value);
 }
 
 function createProgressHandler(capture: IoCapture, options: GlobalCliOptions): ProgressHandler | undefined {
@@ -403,8 +432,14 @@ function workspaceFromArgv(argv: string[]): string {
   return path.resolve(DEFAULT_WORKSPACE);
 }
 
-export async function runCli(argv: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const capture: IoCapture = { stdout: [], stderr: [] };
+export async function runCli(
+  argv: string[],
+  io: {
+    onStdout?: (value: string) => void;
+    onStderr?: (value: string) => void;
+  } = {}
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const capture: IoCapture = { stdout: [], stderr: [], ...io };
   const program = new Command();
 
   program
@@ -475,6 +510,7 @@ Notes:
     .option("--metadata <key=value...>", "Extra metadata fields stored on the source.")
     .option("--max-depth <n>", "Maximum crawl depth for website sources.")
     .option("--max-pages <n>", "Maximum number of pages to ingest from a website source.")
+    .option("--max-concurrent-requests <n>", "Maximum remote requests in flight for a website or feed source.")
     .option("--include <pattern...>", "Only include matching paths or URLs.")
     .option("--exclude <pattern...>", "Skip matching paths or URLs.")
     .option("--render-js", "Render pages with JavaScript before extraction when supported.")
@@ -487,14 +523,17 @@ Examples:
   qli source add file ./docs/auth.md --name "Auth Guide"
   qli source add page https://example.com/docs/auth --name "Auth Page"
   qli source add website https://example.com --name "Docs Site" --max-depth 2 --max-pages 50 --include /docs/
+  qli source add website https://example.com --name "Docs Site" --max-concurrent-requests 8
   qli source add website https://example.com --name "Example Site" --json
   qli source add rss https://example.com/feed.xml --name "Release Feed"
+  qli source add rss https://example.com/feed.xml --name "Release Feed" --max-concurrent-requests 3
   qli source add rss https://example.com/feed.xml --name "Release Feed" --retention-days 30
 
 Notes:
   page stores one page. It does not crawl links or detect feeds.
   Website sources may detect one blog or news feed during registration.
   When a feed is added, qli also excludes the feed item prefix from the website crawl when it can infer one.
+  Website and RSS sources default to 5 remote requests in flight per source unless config.yaml or source settings override it.
   Use --json when automation needs the full list of created sources.
   RSS sources store retention per feed.
   When you omit --retention-days for RSS, qli stores the workspace default from config.yaml.`)
@@ -587,12 +626,14 @@ Notes:
     .option("--metadata <key=value...>", "Merge metadata keys into the existing source metadata.")
     .option("--max-depth <n>", "Set website crawl depth.")
     .option("--max-pages <n>", "Set the page limit for website sources.")
+    .option("--max-concurrent-requests <n>", "Set the remote request concurrency limit for website or feed sources.")
     .option("--include <pattern...>", "Set include patterns for website or directory sources.")
     .option("--exclude <pattern...>", "Set exclude patterns for website or directory sources.")
     .option("--retention-days <n>", "Set RSS retention in days for this feed.")
     .addHelpText("after", `
 Examples:
   qli source config src_123 --retention-days 30
+  qli source config src_123 --max-concurrent-requests 2
   qli source config src_123 --name "Docs Feed" --tag rss docs
   qli source config src_123 --include /docs/ --exclude /docs/archive/
   qli source config src_123 --metadata team=docs owner=platform --json

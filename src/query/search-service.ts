@@ -12,6 +12,7 @@ import { createIndexMapping } from "../index/querylight-indexer.js";
 import { denseQuery } from "../vector/dense.js";
 import { sparseQuery } from "../vector/sparse.js";
 import { denseVectorPath, sparseVectorPath } from "../vector/store.js";
+import { normalizeRemoteUrl } from "../core/urls.js";
 
 async function loadHydratedIndex(workspacePath: string): Promise<DocumentIndex> {
   let state: object;
@@ -366,9 +367,28 @@ function normalizeDisplayTitle(title: string): string {
     .trim();
 }
 
+const LOW_SIGNAL_RESULT_TITLES = new Set([
+  "choose this instead of",
+  "how xyz runs it",
+  "naechste schritte",
+  "next steps",
+  "overview",
+  "passend wenn",
+  "problem",
+  "right fit",
+  "waehlen sie das stattdessen",
+  "was sie bekommen",
+  "what you get",
+  "wie xyz es umsetzt",
+  "uberblick",
+  "überblick"
+]);
+
 function chooseResultTitle(chunk: ChunkRecord): string {
   const documentTitle = normalizeDisplayTitle(chunk.title);
-  const headings = chunk.headingPath.map((heading) => normalizeDisplayTitle(heading)).filter(Boolean);
+  const headings = chunk.headingPath
+    .map((heading) => normalizeDisplayTitle(heading))
+    .filter((heading) => heading.length > 0 && !LOW_SIGNAL_RESULT_TITLES.has(heading.toLowerCase()));
   const leafHeading = headings.at(-1);
 
   if (leafHeading && leafHeading.toLowerCase() !== documentTitle.toLowerCase()) {
@@ -398,6 +418,10 @@ function normalizeUriPath(uri: string): string {
   }
 }
 
+function normalizeUriIdentity(uri: string): string {
+  return normalizeRemoteUrl(uri).toLowerCase().replace(/\/+$/, "");
+}
+
 function uriSpecificity(uri: string): number {
   const normalized = normalizeUriPath(uri);
   if (normalized === "/") {
@@ -415,6 +439,12 @@ function isMoreSpecificDuplicate(candidate: SearchResult, existing: SearchResult
   const existingTitle = normalizeComparisonText(existing.title);
   if (!candidateTitle || candidateTitle !== existingTitle) {
     return false;
+  }
+
+  const candidateIdentity = normalizeUriIdentity(candidate.uri);
+  const existingIdentity = normalizeUriIdentity(existing.uri);
+  if (candidateIdentity === existingIdentity) {
+    return candidate.uri.length < existing.uri.length;
   }
 
   const candidatePath = normalizeUriPath(candidate.uri);

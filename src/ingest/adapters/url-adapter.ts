@@ -4,8 +4,9 @@ import type { DocumentRecord, HttpCacheMetadata, Source } from "../../types/mode
 import { fileExists } from "../../core/files.js";
 import { sha256 } from "../../core/hashing.js";
 import { stableId } from "../../core/ids.js";
+import { normalizeRemoteUrl } from "../../core/urls.js";
 import { buildDocumentMetadata, writeNormalizedDocument } from "../document-utils.js";
-import { extractHtmlToMarkdown, extractPublicationDateFromHtml } from "../extractors/html-extractor.js";
+import { extractCanonicalUriFromHtml, extractHtmlToMarkdown, extractPublicationDateFromHtml } from "../extractors/html-extractor.js";
 
 export type FetchRemoteDocumentOptions = {
   workspacePath: string;
@@ -57,10 +58,11 @@ async function normalizeRemoteDocument(
   }
 ): Promise<DocumentRecord> {
   const extracted = extractHtmlToMarkdown(body);
+  const canonicalUri = normalizeRemoteUrl(extractCanonicalUriFromHtml(body, url) ?? url);
   const markdown = `# ${extracted.title}\n\n${extracted.markdown}`;
-  const documentId = stableId("doc", source.id, url);
+  const documentId = stableId("doc", source.id, canonicalUri);
   const normalizedPath = path.resolve(workspacePath, "normalized", `${documentId}.md`);
-  const rawPath = path.resolve(workspacePath, "raw", source.id, `${sha256(url).slice(0, 12)}.html`);
+  const rawPath = path.resolve(workspacePath, "raw", source.id, `${sha256(canonicalUri).slice(0, 12)}.html`);
   const contentHash = sha256(markdown);
   const now = new Date().toISOString();
   const lastChangedAt = previous?.contentHash === contentHash ? previous.lastChangedAt : now;
@@ -74,7 +76,7 @@ async function normalizeRemoteDocument(
     documentId,
     sourceId: source.id,
     title: extracted.title,
-    uri: url,
+    uri: canonicalUri,
     sourceUri,
     publicationDate: resolvedPublicationDate,
     crawledAt,
@@ -89,8 +91,9 @@ async function normalizeRemoteDocument(
     sourceId: source.id,
     sourceType: source.type,
     title: extracted.title,
-    uri: url,
+    uri: canonicalUri,
     sourceUri,
+    canonicalUri,
     mimeType: "text/html",
     rawPath,
     normalizedPath,

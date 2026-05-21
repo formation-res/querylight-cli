@@ -58,6 +58,7 @@ export const defaultConfig = (): WorkspaceConfig => ({
     defaultUserAgent: "querylight-cli/0.1",
     obeyRobotsTxt: true,
     rateLimitMs: 1000,
+    maxConcurrentRequests: 5,
     renderJs: false,
     retentionDays: 365,
     fetchArticles: true

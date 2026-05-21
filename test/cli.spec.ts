@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/cli/run-cli.js";
 import { setDenseEmbedderFactoryForTests } from "../src/vector/dense.js";
 import { setPullModelsForTests } from "../src/vector/service.js";
@@ -18,6 +18,7 @@ async function tempWorkspace(): Promise<string> {
 afterEach(async () => {
   setDenseEmbedderFactoryForTests(null);
   delete process.env.QLI_HOME;
+  vi.unstubAllGlobals();
   await Promise.all(tempDirs.splice(0).map(async (dir) => {
     await import("node:fs/promises").then((fs) => fs.rm(dir, { recursive: true, force: true }));
   }));
@@ -216,6 +217,110 @@ describe("cli json output", () => {
     expect(silent.exitCode).toBe(0);
     expect(silent.stdout).toContain("Processed 1 sources");
     expect(silent.stderr).toBe("");
+  });
+
+  it("streams ingest progress through stderr callbacks before the command completes", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
+
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return new Response("<html><head><title>Delayed Page</title></head><body><h1>Delayed Page</h1><p>content</p></body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }));
+
+    await runCli([
+      "source",
+      "add",
+      "page",
+      "https://example.com/delayed",
+      "--workspace",
+      workspace,
+      "--name",
+      "Delayed Page"
+    ]);
+
+    const streamed: string[] = [];
+    const ingestPromise = runCli(["ingest", "--workspace", workspace], {
+      onStderr(value) {
+        streamed.push(value);
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(streamed).toContain("Ingest step 1/3: fetch and normalize");
+    expect(streamed).toContain("Ingesting 1 source");
+
+    const ingest = await ingestPromise;
+    expect(ingest.exitCode).toBe(0);
+    expect(streamed).toEqual(ingest.stderr.split("\n"));
+  });
+
+  it("streams crawl discovery progress before website crawling finishes", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\ncrawler:\n  maxConcurrentRequests: 1\n", "utf8");
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/robots.txt" || url === "https://example.com/sitemap.xml") {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return new Response("not found", { status: 404 });
+      }
+      if (url === "https://example.com/") {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return new Response("<html><body><a href=\"/one\">One</a><a href=\"/two\">Two</a></body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return new Response(`<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`, {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }));
+
+    await runCli([
+      "source",
+      "add",
+      "website",
+      "https://example.com/",
+      "--workspace",
+      workspace,
+      "--name",
+      "Example Site",
+      "--max-depth",
+      "1",
+      "--max-concurrent-requests",
+      "1"
+    ]);
+
+    const streamed: string[] = [];
+    const ingestPromise = runCli(["ingest", "--workspace", workspace], {
+      onStderr(value) {
+        streamed.push(value);
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(streamed).toContain("Crawling https://example.com/");
+    expect(streamed).toContain("Discovered 0 sitemap URLs for https://example.com/");
+    expect(streamed).toContain("Crawl depth 0: evaluating 1 candidate URL");
+    expect(streamed).toContain("Discovered https://example.com/");
+
+    const ingest = await ingestPromise;
+    expect(ingest.exitCode).toBe(0);
+    expect(streamed.some((line) => line.startsWith("Fetched "))).toBe(true);
   });
 
   it("search works after ingest without a separate rebuild", async () => {

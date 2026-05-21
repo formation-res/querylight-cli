@@ -75,7 +75,7 @@ describe("cli contracts", () => {
     expect(JSON.parse(enabled.stdout).data.enabled).toBe(true);
   });
 
-  it("stores rss retention per feed and edits it through source config", async () => {
+  it("stores rss retention and concurrency per feed and edits them through source config", async () => {
     const root = await tempWorkspace("qli-cli-");
     const workspace = path.join(root, ".kb");
     await runCli(["init", "--workspace", workspace]);
@@ -89,10 +89,13 @@ describe("cli contracts", () => {
       workspace,
       "--name",
       "Feed",
+      "--max-concurrent-requests",
+      "3",
       "--json"
     ]);
     const addedParsed = JSON.parse(added.stdout);
     expect(addedParsed.data.crawl.retentionDays).toBe(365);
+    expect(addedParsed.data.crawl.maxConcurrentRequests).toBe(3);
     expect(addedParsed.data.crawl.fetchArticles).toBe(true);
 
     const updated = await runCli([
@@ -103,17 +106,21 @@ describe("cli contracts", () => {
       workspace,
       "--retention-days",
       "30",
+      "--max-concurrent-requests",
+      "2",
       "--metadata",
       "team=docs",
       "--json"
     ]);
     const updatedParsed = JSON.parse(updated.stdout);
     expect(updatedParsed.data.crawl.retentionDays).toBe(30);
+    expect(updatedParsed.data.crawl.maxConcurrentRequests).toBe(2);
     expect(updatedParsed.data.crawl.fetchArticles).toBe(true);
     expect(updatedParsed.data.metadata.team).toBe("docs");
 
     const stored = await readFile(path.join(workspace, "sources", "sources.jsonl"), "utf8");
     expect(stored).toContain("\"retentionDays\":30");
+    expect(stored).toContain("\"maxConcurrentRequests\":2");
   });
 
   it("returns status and doctor json envelopes", async () => {

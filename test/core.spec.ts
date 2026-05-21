@@ -195,6 +195,49 @@ describe("ingest, chunk, index, query", () => {
     expect(search.results.some((result) => result.documentId === "doc-aggregate" && result.title === "BoostingQuery for Soft Demotion Instead of Hard Exclusion")).toBe(false);
   });
 
+  it("collapses fragment-only duplicate search results for the same document", async () => {
+    const root = await tempWorkspace();
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
+      {
+        id: "chunk-base",
+        documentId: "doc-base",
+        sourceId: "src1",
+        title: "Your Agentic Use Case",
+        uri: "https://formationxyz.com/services/your-agentic-use-case/",
+        headingPath: ["Your Agentic Use Case"],
+        text: "Bring the workflow, bottleneck, or AI use case that needs custom AI implementation.",
+        tokenEstimate: 18,
+        contentHash: "hash-base",
+        metadata: { tags: ["services"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "chunk-fragment",
+        documentId: "doc-fragment",
+        sourceId: "src1",
+        title: "Your Agentic Use Case",
+        uri: "https://formationxyz.com/services/your-agentic-use-case/#ideas",
+        headingPath: ["Your Agentic Use Case"],
+        text: "Bring the workflow, bottleneck, or AI use case that needs custom AI implementation.",
+        tokenEstimate: 18,
+        contentHash: "hash-fragment",
+        metadata: { tags: ["services"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    await buildIndex({ workspacePath });
+
+    const search = await searchIndex({ workspacePath, query: "custom AI implementation workflow bottleneck", topK: 5 });
+    expect(search.results.filter((result) => result.title === "Your Agentic Use Case")).toHaveLength(1);
+    expect(search.results[0]?.uri).toBe("https://formationxyz.com/services/your-agentic-use-case/");
+  });
+
   it("reports changed documents and markdown change reports", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });

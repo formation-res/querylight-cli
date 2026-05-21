@@ -8,7 +8,7 @@ import { buildIndex } from "../src/index/querylight-indexer.js";
 import { findRelatedDocuments } from "../src/query/related-service.js";
 import { searchIndex } from "../src/query/search-service.js";
 import { createContext } from "../src/query/context-builder.js";
-import { readDensePayload, readSparsePayload } from "../src/vector/store.js";
+import { readDensePayload, readSparsePayload, writeDensePayload } from "../src/vector/store.js";
 import { createDenseChunkText, createSparseChunkText } from "../src/vector/text.js";
 import { setDenseEmbedderFactoryForTests } from "../src/vector/dense.js";
 import { setSparseDocumentBuilderFactoryForTests, setSparseQueryEncoderFactoryForTests } from "../src/vector/sparse.js";
@@ -65,6 +65,29 @@ describe("vector helpers and retrieval", () => {
     expect(createDenseChunkText(chunk)).toContain("Documentation");
     expect(createDenseChunkText(chunk)).toContain("Ranking");
     expect(createSparseChunkText(chunk)).toContain("BM25 ranking chooses");
+  });
+
+  it("drops low-signal headings from vector text", () => {
+    const chunk = {
+      id: "chunk1",
+      documentId: "doc1",
+      sourceId: "src1",
+      title: "NemoClaw Setup",
+      uri: "https://example.com/nemoclaw",
+      headingPath: ["Overview", "What You Get"],
+      text: "## What You Get\n\nSet up NemoClaw as a controlled OpenClaw and OpenShell stack.",
+      contentHash: "hash",
+      metadata: {},
+      firstSeenAt: "2026-05-18T00:00:00.000Z",
+      lastSeenAt: "2026-05-18T00:00:00.000Z",
+      lastChangedAt: "2026-05-18T00:00:00.000Z"
+    };
+
+    const denseText = createDenseChunkText(chunk);
+    expect(denseText).toContain("NemoClaw Setup");
+    expect(denseText).toContain("controlled OpenClaw and OpenShell stack");
+    expect(denseText).not.toContain("Overview");
+    expect(denseText).not.toContain("What You Get");
   });
 
   it("builds dense and sparse vector artifacts and searches all retrieval modes", async () => {
@@ -308,6 +331,101 @@ describe("vector helpers and retrieval", () => {
     expect(related.sourceDocument.documentId).toBe("doc-bm25");
     expect(related.results[0]?.documentId).toBe("doc-bm25-advanced");
     expect(related.results[0]?.score).toBeGreaterThan(related.results[1]?.score ?? -1);
+  });
+
+  it("falls back to exact dense scoring when the approximate index returns no candidates", async () => {
+    const root = await tempWorkspace("qli-vector-");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n  sparse:\n    enabled: false\n", "utf8");
+    await writeJsonl(path.join(workspacePath, "sources", "sources.jsonl"), [
+      {
+        id: "src1",
+        type: "directory",
+        name: "Docs",
+        uri: "/tmp/docs",
+        enabled: true,
+        tags: ["docs"],
+        metadata: {},
+        createdAt: "2026-05-18T00:00:00.000Z",
+        updatedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+    await writeJsonl(path.join(workspacePath, "documents", "documents.jsonl"), [
+      {
+        id: "doc1",
+        sourceId: "src1",
+        sourceType: "directory",
+        title: "BM25",
+        uri: "file:///bm25.md",
+        mimeType: "text/markdown",
+        normalizedPath: "unused",
+        contentHash: "hash1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "doc2",
+        sourceId: "src1",
+        sourceType: "directory",
+        title: "Sparse",
+        uri: "file:///sparse.md",
+        mimeType: "text/markdown",
+        normalizedPath: "unused",
+        contentHash: "hash2",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+    await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
+      {
+        id: "chunk-bm25",
+        documentId: "doc1",
+        sourceId: "src1",
+        title: "BM25",
+        uri: "file:///bm25.md",
+        headingPath: ["Ranking"],
+        text: "BM25 ranking explains lexical term weighting.",
+        contentHash: "c1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "chunk-sparse",
+        documentId: "doc2",
+        sourceId: "src1",
+        title: "Sparse",
+        uri: "file:///sparse.md",
+        headingPath: ["Vectors"],
+        text: "Sparse vector search uses token weights.",
+        contentHash: "c2",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    setDenseEmbedderFactoryForTests(async () => async (text) => fakeDenseEmbedding(text));
+    await buildIndex({ workspacePath, denseOverride: true });
+
+    const densePayload = await readDensePayload(workspacePath);
+    await writeDensePayload(workspacePath, {
+      ...densePayload,
+      indexState: {
+        ...densePayload.indexState,
+        vectors: {}
+      }
+    });
+
+    const dense = await searchIndex({ workspacePath, query: "bm25 ranking", topK: 5, retrievalMode: "dense" });
+    expect(dense.results[0]?.chunkId).toBe("chunk-bm25");
   });
 
 });

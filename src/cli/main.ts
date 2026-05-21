@@ -2,13 +2,14 @@
 import { runCli } from "./run-cli.js";
 
 try {
-  const result = await runCli(process.argv.slice(2));
-  if (result.stdout) {
-    process.stdout.write(`${result.stdout}\n`);
-  }
-  if (result.stderr) {
-    process.stderr.write(`${result.stderr}\n`);
-  }
+  const result = await runCli(process.argv.slice(2), {
+    onStdout(value) {
+      process.stdout.write(`${value}\n`);
+    },
+    onStderr(value) {
+      process.stderr.write(`${value}\n`);
+    }
+  });
   process.exitCode = result.exitCode;
 } catch (error) {
   const message = error instanceof Error ? error.stack ?? error.message : String(error);

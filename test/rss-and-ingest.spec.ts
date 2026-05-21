@@ -21,7 +21,174 @@ function htmlPage(title: string, body: string, publicationDate?: string): string
   return `<!doctype html><html><head><title>${title}</title>${dateMeta}</head><body><main><h1>${title}</h1><p>${body}</p></main></body></html>`;
 }
 
+function rssFeed(itemUrls: string[]): string {
+  const items = itemUrls
+    .map((url, index) => `<item><title>Item ${index + 1}</title><link>${url}</link><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item>`)
+    .join("");
+  return `<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title>${items}</channel></rss>`;
+}
+
 describe("conditional remote ingest", () => {
+  it("normalizes website fragment links before indexing documents", async () => {
+    const root = await tempWorkspace("qli-website-fragments-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const source = await addSource(workspacePath, {
+      type: "website",
+      uri: "https://example.com/",
+      name: "Example",
+      enabled: true,
+      tags: ["site"],
+      metadata: {},
+      crawl: { maxDepth: 1, maxPages: 10, useSitemap: false, rateLimitMs: 0 },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/robots.txt") {
+        return new Response("", { status: 404 });
+      }
+      if (url === "https://example.com/") {
+        return new Response(`<!doctype html><html><head><title>Home</title></head><body><main>
+          <h1>Home</h1>
+          <a href="#about">About</a>
+          <a href="#ideas">Ideas</a>
+          <a href="/pricing">Pricing</a>
+        </main></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/pricing") {
+        return new Response(htmlPage("Pricing", "Plan details"), {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ingestSources({ workspacePath, sourceIds: [source.id] });
+    const documents = await import("../src/core/jsonl.js").then((mod) => mod.readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl")));
+
+    expect(documents.map((document) => document.uri).sort()).toEqual([
+      "https://example.com/",
+      "https://example.com/pricing"
+    ]);
+    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/#about", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/#ideas", expect.anything());
+  });
+
+  it("skips query-string variants and xml endpoints during website crawling", async () => {
+    const root = await tempWorkspace("qli-website-query-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const source = await addSource(workspacePath, {
+      type: "website",
+      uri: "https://example.com/",
+      name: "Example",
+      enabled: true,
+      tags: ["site"],
+      metadata: {},
+      crawl: { maxDepth: 1, maxPages: 10, useSitemap: false, rateLimitMs: 0 },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/robots.txt") {
+        return new Response("", { status: 404 });
+      }
+      if (url === "https://example.com/") {
+        return new Response(`<!doctype html><html><head><title>Home</title></head><body><main>
+          <a href="/pricing">Pricing</a>
+          <a href="/?service=Starter">Starter</a>
+          <a href="/podcast/index.xml">Podcast Feed</a>
+          <a href="/search/">Search</a>
+          <a href="/cdn-cgi/l/email-protection">Email</a>
+        </main></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/pricing") {
+        return new Response(htmlPage("Pricing", "Plan details"), {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ingestSources({ workspacePath, sourceIds: [source.id] });
+    const documents = await import("../src/core/jsonl.js").then((mod) => mod.readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl")));
+
+    expect(documents.map((document) => document.uri).sort()).toEqual([
+      "https://example.com/",
+      "https://example.com/pricing"
+    ]);
+    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/?service=Starter", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/podcast/index.xml", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/search/", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/cdn-cgi/l/email-protection", expect.anything());
+  });
+
+  it("indexes a canonical website page only once across aliases", async () => {
+    const root = await tempWorkspace("qli-website-canonical-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const source = await addSource(workspacePath, {
+      type: "website",
+      uri: "https://example.com/",
+      name: "Example",
+      enabled: true,
+      tags: ["site"],
+      metadata: {},
+      crawl: { maxDepth: 1, maxPages: 10, useSitemap: false, rateLimitMs: 0, maxConcurrentRequests: 1 },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/robots.txt") {
+        return new Response("", { status: 404 });
+      }
+      if (url === "https://example.com/") {
+        return new Response(`<!doctype html><html><head><title>Home</title></head><body><main>
+          <a href="/offers/starter">Starter Alias</a>
+          <a href="/services/starter">Starter Canonical</a>
+        </main></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/offers/starter") {
+        return new Response(`<!doctype html><html><head>
+          <title>Starter Offer</title>
+          <link rel="canonical" href="https://example.com/services/starter">
+        </head><body><main><h1>Starter Offer</h1><p>Starter body</p></main></body></html>`, {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      if (url === "https://example.com/services/starter") {
+        return new Response(`<!doctype html><html><head>
+          <title>Starter Offer</title>
+          <link rel="canonical" href="https://example.com/services/starter">
+        </head><body><main><h1>Starter Offer</h1><p>Starter body</p></main></body></html>`, {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ingestSources({ workspacePath, sourceIds: [source.id] });
+    const documents = await import("../src/core/jsonl.js").then((mod) => mod.readJsonl<DocumentRecord>(path.join(workspacePath, "documents", "documents.jsonl")));
+
+    expect(result.documents.added).toBe(2);
+    expect(documents.map((document) => document.uri).sort()).toEqual([
+      "https://example.com/",
+      "https://example.com/services/starter"
+    ]);
+    expect(documents.find((document) => document.uri === "https://example.com/services/starter")?.canonicalUri).toBe("https://example.com/services/starter");
+  });
+
   it("preserves crawledAt and raw content on 304 while updating lastSeenAt", async () => {
     const root = await tempWorkspace("qli-304-");
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
@@ -105,6 +272,52 @@ describe("conditional remote ingest", () => {
     expect(updated.crawledAt).toBe(document.crawledAt);
     expect(updated.indexedAt && document.indexedAt && updated.indexedAt > document.indexedAt).toBe(true);
     expect(normalized).toContain("Reprocessed body");
+  });
+
+  it("fetches crawled website pages concurrently and respects the source concurrency limit", async () => {
+    const root = await tempWorkspace("qli-website-concurrency-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const source = await addSource(workspacePath, {
+      type: "website",
+      uri: "https://example.com/",
+      name: "Example",
+      enabled: true,
+      tags: ["site"],
+      metadata: {},
+      crawl: { maxDepth: 1, maxPages: 6, useSitemap: false, rateLimitMs: 0, maxConcurrentRequests: 2 },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/robots.txt") {
+        return new Response("", { status: 404 });
+      }
+      if (url === "https://example.com/") {
+        return new Response(`<!doctype html><html><body>
+          <a href="/one">One</a>
+          <a href="/two">Two</a>
+          <a href="/three">Three</a>
+          <a href="/four">Four</a>
+        </body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      inFlight -= 1;
+      return new Response(htmlPage(url.split("/").pop() ?? "Page", "Body"), {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ingestSources({ workspacePath, sourceIds: [source.id] });
+
+    expect(maxInFlight).toBe(2);
   });
 });
 
@@ -312,5 +525,50 @@ describe("rss parsing and retention", () => {
     expect(documents.map((document) => document.uri)).toEqual(["https://example.com/fresh"]);
     await expect(stat(rawPath)).rejects.toThrow();
     await expect(stat(normalizedPath)).rejects.toThrow();
+  });
+
+  it("fetches rss articles concurrently and respects the workspace default concurrency limit", async () => {
+    const root = await tempWorkspace("qli-rss-concurrency-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "crawler:\n  maxConcurrentRequests: 3\n", "utf8");
+    const source = await addSource(workspacePath, {
+      type: "rss",
+      uri: "https://example.com/feed.xml",
+      name: "Feed",
+      enabled: true,
+      tags: ["news"],
+      metadata: {},
+      crawl: { fetchArticles: true },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/feed.xml") {
+        return new Response(rssFeed([
+          "https://example.com/a",
+          "https://example.com/b",
+          "https://example.com/c",
+          "https://example.com/d",
+          "https://example.com/e"
+        ]), { status: 200, headers: { "content-type": "application/rss+xml" } });
+      }
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      inFlight -= 1;
+      return new Response(htmlPage(url.split("/").pop() ?? "Item", "Story"), {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ingestSources({ workspacePath, sourceIds: [source.id] });
+
+    expect(maxInFlight).toBe(3);
   });
 });

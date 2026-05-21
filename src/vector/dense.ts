@@ -1,4 +1,4 @@
-import { VectorFieldIndex, createSeededRandom, type VectorFieldIndexState } from "@tryformation/querylight-ts";
+import { VectorFieldIndex, cosineSimilarity, createSeededRandom, type VectorFieldIndexState } from "@tryformation/querylight-ts";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { sha256 } from "../core/hashing.js";
@@ -10,6 +10,7 @@ import { writeDensePayload, readDensePayload } from "./store.js";
 import { createDenseChunkText } from "./text.js";
 
 let denseEmbedderFactory: ((cacheDir: string, modelId: string) => Promise<(text: string) => Promise<number[]>>) | null = null;
+const EXACT_DENSE_RERANK_THRESHOLD = 5_000;
 
 export function setDenseEmbedderFactoryForTests(
   factory: ((cacheDir: string, modelId: string) => Promise<(text: string) => Promise<number[]>>) | null
@@ -27,6 +28,13 @@ async function createEmbedder(cacheDir: string, modelId: string): Promise<(text:
     const output = await extractor(text, { pooling: "mean", normalize: true });
     return output.tolist()[0] as number[];
   };
+}
+
+function exactDenseQuery(payload: DenseVectorPayload, vector: number[], topK: number): Array<[string, number]> {
+  return payload.chunks
+    .map((chunk): [string, number] => [chunk.chunkId, cosineSimilarity(vector, chunk.embedding)])
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, topK);
 }
 
 export async function pullDenseModel(workspacePath: string, config: WorkspaceConfig["retrieval"]["dense"]): Promise<void> {
@@ -118,10 +126,17 @@ export async function denseQuery(
   const cacheDir = resolveCacheDir(workspacePath, config.cacheDir);
   const embed = await createEmbedder(cacheDir, config.modelId);
   const vector = await embed(query);
+  if (payload.chunks.length <= EXACT_DENSE_RERANK_THRESHOLD) {
+    return exactDenseQuery(payload, vector, topK);
+  }
   const index = new VectorFieldIndex({
     numHashTables: payload.metadata.hashTables,
     dimensions: payload.metadata.dimensions,
     random: createSeededRandom(payload.metadata.randomSeed)
   }).loadState(payload.indexState as VectorFieldIndexState) as VectorFieldIndex;
-  return index.query(vector, topK);
+  const approximateHits = index.query(vector, topK);
+  if (approximateHits.length >= topK) {
+    return approximateHits;
+  }
+  return exactDenseQuery(payload, vector, topK);
 }

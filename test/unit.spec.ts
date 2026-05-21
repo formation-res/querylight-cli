@@ -63,6 +63,42 @@ describe("normalization", () => {
     expect(extracted.markdown).not.toContain("](/docs/ranking");
   });
 
+  it("drops low-signal recommendation and escaped json blocks from html extraction", () => {
+    const html = `
+      <main>
+        <article>
+          <h1>Main Article</h1>
+          <p>Important body content.</p>
+        </article>
+        <section>
+          <h3>Get new XYZ posts by email</h3>
+          <form action="https://formationxyz.substack.com/subscribe">
+            <input type="email" name="email" />
+          </form>
+        </section>
+        <section data-blog-service-recommendations>
+          <p>Recommended services</p>
+          <script type="application/json" data-blog-service-recommendations-data>
+            "[{\\"permalink\\":\\"/services/test/\\",\\"title\\":\\"Test\\"}]"
+          </script>
+        </section>
+        <section data-blog-related-posts>
+          <p>Related posts</p>
+          <script type="application/json" data-blog-related-posts-data>
+            "[{\\"permalink\\":\\"/blog/test/\\",\\"title\\":\\"Related\\"}]"
+          </script>
+        </section>
+      </main>
+    `;
+
+    const extracted = extractHtmlToMarkdown(html);
+    expect(extracted.markdown).toContain("Important body content.");
+    expect(extracted.markdown).not.toContain("Get new XYZ posts by email");
+    expect(extracted.markdown).not.toContain("Recommended services");
+    expect(extracted.markdown).not.toContain("Related posts");
+    expect(extracted.markdown).not.toContain('\\"permalink\\":');
+  });
+
   it("normalizes whitespace and writes frontmatter", () => {
     const normalized = normalizeWhitespace("a  \n\n\nb\n");
     expect(normalized).toBe("a\n\nb");

@@ -1,4 +1,7 @@
 import { load } from "cheerio";
+import { mapWithConcurrency } from "../../core/concurrency.js";
+import { reportProgress, type ProgressHandler } from "../../core/progress.js";
+import { normalizeRemoteUrl } from "../../core/urls.js";
 import type { Source } from "../../types/models.js";
 
 async function fetchRobotsDisallow(url: URL, userAgent: string): Promise<string[]> {
@@ -36,6 +39,18 @@ function isAllowed(url: URL, baseUrl: URL, includePatterns: string[], excludePat
   if (url.origin !== baseUrl.origin) {
     return false;
   }
+  if (url.search.length > 0) {
+    return false;
+  }
+  if (url.pathname.endsWith(".xml")) {
+    return false;
+  }
+  if (url.pathname.includes("/cdn-cgi/")) {
+    return false;
+  }
+  if (url.pathname === "/search" || url.pathname === "/search/" || url.pathname.endsWith("/search/")) {
+    return false;
+  }
   if (disallowRules.some((rule) => rule !== "/" && url.pathname.startsWith(rule))) {
     return false;
   }
@@ -49,59 +64,91 @@ function isAllowed(url: URL, baseUrl: URL, includePatterns: string[], excludePat
   return true;
 }
 
-export async function crawlWebsite(source: Source): Promise<string[]> {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function crawlWebsite(
+  source: Source,
+  defaults: {
+    userAgent: string;
+    rateLimitMs: number;
+    maxConcurrentRequests: number;
+  },
+  progress?: ProgressHandler
+): Promise<string[]> {
   const baseUrl = new URL(source.uri);
-  const userAgent = source.crawl?.userAgent ?? "querylight-cli/0.1";
+  const userAgent = source.crawl?.userAgent ?? defaults.userAgent;
   const includePatterns = source.crawl?.includePatterns ?? [];
   const excludePatterns = source.crawl?.excludePatterns ?? [];
   const maxDepth = source.crawl?.maxDepth ?? 2;
   const maxPages = source.crawl?.maxPages ?? 100;
-  const rateLimitMs = source.crawl?.rateLimitMs ?? 1000;
+  const rateLimitMs = source.crawl?.rateLimitMs ?? defaults.rateLimitMs;
+  const maxConcurrentRequests = source.crawl?.maxConcurrentRequests ?? defaults.maxConcurrentRequests;
   const disallowRules = source.crawl?.obeyRobotsTxt === false ? [] : await fetchRobotsDisallow(baseUrl, userAgent);
-  const queue: Array<{ url: string; depth: number }> = [{ url: source.uri, depth: 0 }];
   const seen = new Set<string>();
   const results: string[] = [];
+  let currentLevel = [normalizeRemoteUrl(source.uri)];
 
   if (source.crawl?.useSitemap !== false) {
-    for (const url of await fetchSitemapUrls(baseUrl, userAgent)) {
-      queue.push({ url, depth: 1 });
-    }
+    const sitemapUrls = (await fetchSitemapUrls(baseUrl, userAgent)).map((url) => normalizeRemoteUrl(url));
+    reportProgress(progress, `Discovered ${sitemapUrls.length} sitemap URL${sitemapUrls.length === 1 ? "" : "s"} for ${source.uri}`);
+    currentLevel = [
+      ...currentLevel,
+      ...sitemapUrls
+    ];
   }
 
-  while (queue.length > 0 && results.length < maxPages) {
-    const next = queue.shift();
-    if (!next || seen.has(next.url)) {
-      continue;
-    }
-    seen.add(next.url);
-    const url = new URL(next.url);
-    if (!isAllowed(url, baseUrl, includePatterns, excludePatterns, disallowRules)) {
-      continue;
-    }
-    results.push(url.href);
-    if (next.depth >= maxDepth) {
-      continue;
-    }
-    const response = await fetch(url, { headers: { "user-agent": userAgent } });
-    const html = await response.text();
-    const $ = load(html);
-    $("a[href]").each((_, element) => {
-      const href = $(element).attr("href");
-      if (!href) {
-        return;
+  for (let depth = 0; depth <= maxDepth && currentLevel.length > 0 && results.length < maxPages; depth += 1) {
+    reportProgress(progress, `Crawl depth ${depth}: evaluating ${currentLevel.length} candidate URL${currentLevel.length === 1 ? "" : "s"}`);
+    const nextLevelCandidates: string[] = [];
+    const allowedUrls: string[] = [];
+    for (const candidate of currentLevel) {
+      const normalizedCandidate = normalizeRemoteUrl(candidate);
+      if (seen.has(normalizedCandidate)) {
+        continue;
       }
-      try {
-        const target = new URL(href, url);
-        if (!seen.has(target.href)) {
-          queue.push({ url: target.href, depth: next.depth + 1 });
+      seen.add(normalizedCandidate);
+      const url = new URL(normalizedCandidate);
+      if (!isAllowed(url, baseUrl, includePatterns, excludePatterns, disallowRules)) {
+        continue;
+      }
+      allowedUrls.push(normalizedCandidate);
+      results.push(normalizedCandidate);
+      reportProgress(progress, `Discovered ${normalizedCandidate}`);
+      if (results.length >= maxPages) {
+        break;
+      }
+    }
+
+    reportProgress(progress, `Crawl depth ${depth}: queued ${allowedUrls.length} page${allowedUrls.length === 1 ? "" : "s"} for link extraction`);
+
+    if (depth >= maxDepth || results.length >= maxPages) {
+      break;
+    }
+
+    await mapWithConcurrency(allowedUrls, maxConcurrentRequests, async (pageUrl) => {
+      const page = new URL(pageUrl);
+      const response = await fetch(page, { headers: { "user-agent": userAgent } });
+      const html = await response.text();
+      const $ = load(html);
+      $("a[href]").each((_, element) => {
+        const href = $(element).attr("href");
+        if (!href) {
+          return;
         }
-      } catch {
-        // ignore bad links
+        try {
+          nextLevelCandidates.push(normalizeRemoteUrl(new URL(href, page).href));
+        } catch {
+          // ignore bad links
+        }
+      });
+      if (rateLimitMs > 0) {
+        await delay(rateLimitMs);
       }
     });
-    if (rateLimitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, rateLimitMs));
-    }
+
+    currentLevel = nextLevelCandidates;
   }
   return results;
 }

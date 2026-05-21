@@ -222,6 +222,15 @@ Use a custom workspace with:
 qli --workspace ./my-kb <command>
 ```
 
+Control the default remote concurrency in `config.yaml`:
+
+```yaml
+crawler:
+  maxConcurrentRequests: 5
+```
+
+Set `crawl.maxConcurrentRequests` on a website or RSS source when one source needs a different limit.
+
 ## Supported Sources
 
 Current source types:
@@ -274,19 +283,23 @@ qli source add file ./docs/guide.md --name "Guide"
 qli source add directory ./docs --name "Docs" --tag docs
 qli source add page https://example.com/docs/auth --name "Auth Page"
 qli source add website https://example.com --name "Example Site" --max-depth 2 --max-pages 50
+qli source add website https://example.com --name "Example Site" --max-concurrent-requests 8
 qli source add website https://example.com --name "Example Site" --json
 qli source add rss https://example.com/feed.xml --name "Release Feed"
+qli source add rss https://example.com/feed.xml --name "Release Feed" --max-concurrent-requests 3
 ```
 
 `page` stores one page. `website` crawls a site and may detect one feed during registration.
 
 Website sources may detect one blog or news feed during registration. When qli can infer a shared article prefix such as `/blog/` or `/news/`, it adds that prefix to the website source excludes to reduce duplicate ingestion.
+Website and RSS sources default to `5` remote requests in flight per source. Override that in `config.yaml` or on the source.
 
 List and manage them:
 
 ```bash
 qli source list
 qli source config <source-id> --retention-days 30
+qli source config <source-id> --max-concurrent-requests 2
 qli source config <source-id> --name "Docs Feed" --tag rss docs
 qli source disable <source-id>
 qli source enable <source-id>
@@ -327,6 +340,7 @@ qli rebuild --silent
 ```
 
 `qli ingest` fetches source content, updates affected chunks, and refreshes the index.
+Remote website and RSS fetches run concurrently. By default qli allows `5` in-flight requests per source.
 
 Use `qli rebuild` when you want the explicit full pipeline command:
 

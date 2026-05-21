@@ -1,6 +1,7 @@
 import path from "node:path";
 import { loadChunks, saveChunks } from "../chunk/chunk-store.js";
 import { loadConfig } from "../core/config.js";
+import { mapWithConcurrency } from "../core/concurrency.js";
 import { fileExists } from "../core/files.js";
 import { stableId } from "../core/ids.js";
 import { readJsonl, writeJsonl } from "../core/jsonl.js";
@@ -101,6 +102,7 @@ async function ingestRssSource(
     source,
     previous,
     nextDocuments,
+    maxConcurrentRequests,
     onDocumentProcessed,
     onFailure
   }: {
@@ -108,6 +110,7 @@ async function ingestRssSource(
     source: Source;
     previous: Map<string, DocumentRecord>;
     nextDocuments: Map<string, DocumentRecord>;
+    maxConcurrentRequests: number;
     onDocumentProcessed?: (uri: string, outcome: "added" | "changed" | "unchanged") => void;
     onFailure: (uri: string, error: unknown) => void;
   }
@@ -122,12 +125,13 @@ async function ingestRssSource(
   }
   const xml = await fetchFeedText(source);
   const items = await parseRssFeedDocument(xml, source);
+  const processedDocumentIds = new Set<string>();
   let added = 0;
   let changed = 0;
   let unchanged = 0;
   let failed = 0;
 
-  for (const item of items) {
+  await mapWithConcurrency(items, maxConcurrentRequests, async (item) => {
     try {
       const probe = previous.get(stableId("doc", source.id, item.url));
       const document = await fetchUrlDocument({
@@ -138,22 +142,27 @@ async function ingestRssSource(
         sourceUri: source.uri,
         publicationDate: item.publicationDate
       });
+      if (processedDocumentIds.has(document.id)) {
+        return;
+      }
+      processedDocumentIds.add(document.id);
+      const existingDocument = probe ?? previous.get(document.id);
       nextDocuments.set(document.id, document);
-      if (!probe) {
+      if (!existingDocument) {
         added += 1;
-        onDocumentProcessed?.(item.url, "added");
-      } else if (probe.contentHash !== document.contentHash) {
+        onDocumentProcessed?.(document.uri, "added");
+      } else if (existingDocument.contentHash !== document.contentHash) {
         changed += 1;
-        onDocumentProcessed?.(item.url, "changed");
+        onDocumentProcessed?.(document.uri, "changed");
       } else {
         unchanged += 1;
-        onDocumentProcessed?.(item.url, "unchanged");
+        onDocumentProcessed?.(document.uri, "unchanged");
       }
     } catch (error) {
       failed += 1;
       onFailure(item.url, error);
     }
-  }
+  });
 
   return { added, changed, unchanged, failed };
 }
@@ -177,6 +186,9 @@ export async function ingestSources(
 }> {
   const config = await loadConfig(workspacePath);
   const defaultRetentionDays = config.crawler.retentionDays;
+  const defaultUserAgent = config.crawler.defaultUserAgent;
+  const defaultRateLimitMs = config.crawler.rateLimitMs;
+  const defaultMaxConcurrentRequests = config.crawler.maxConcurrentRequests;
   const sources = (await listSources(workspacePath)).filter((source) => source.enabled && (!sourceIds || sourceIds.includes(source.id)));
   const existing = await loadDocuments(workspacePath);
   const previous = previousMap(existing);
@@ -190,27 +202,36 @@ export async function ingestSources(
   reportProgress(progress, `Ingesting ${sources.length} source${sources.length === 1 ? "" : "s"}`);
 
   for (const source of sources) {
+    const maxConcurrentRequests = source.crawl?.maxConcurrentRequests ?? defaultMaxConcurrentRequests;
     const sourceBefore = { added, changed, unchanged, failed };
+    const processedDocumentIds = new Set<string>();
     const reportDocumentOutcome = (uri: string, outcome: "added" | "changed" | "unchanged"): void => {
       const label = outcome === "unchanged" ? "Unchanged" : outcome === "changed" ? "Updated" : "Added";
       reportProgress(progress, `${label} ${uri}`);
     };
-    const ingestOne = async (uri: string, producer: () => Promise<DocumentRecord>): Promise<void> => {
+    const ingestOne = async (uri: string, producer: () => Promise<DocumentRecord>): Promise<DocumentRecord | null> => {
       try {
         const probeId = stableId("doc", source.id, uri);
         const earlier = previous.get(probeId);
         const document = await producer();
+        if (processedDocumentIds.has(document.id)) {
+          reportProgressDetail(progress, `Skipped duplicate alias ${uri} -> ${document.uri}`);
+          return null;
+        }
+        processedDocumentIds.add(document.id);
+        const existingDocument = earlier ?? previous.get(document.id);
         nextDocuments.set(document.id, document);
-        if (!earlier) {
+        if (!existingDocument) {
           added += 1;
-          reportDocumentOutcome(uri, "added");
-        } else if (earlier.contentHash !== document.contentHash) {
+          reportDocumentOutcome(document.uri, "added");
+        } else if (existingDocument.contentHash !== document.contentHash) {
           changed += 1;
-          reportDocumentOutcome(uri, "changed");
+          reportDocumentOutcome(document.uri, "changed");
         } else {
           unchanged += 1;
-          reportDocumentOutcome(uri, "unchanged");
+          reportDocumentOutcome(document.uri, "unchanged");
         }
+        return document;
       } catch (error) {
         failed += 1;
         failures.push({
@@ -219,6 +240,7 @@ export async function ingestSources(
           message: error instanceof Error ? error.message : String(error)
         });
         reportProgressDetail(progress, `Failed ${uri}: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
       }
     };
 
@@ -239,12 +261,24 @@ export async function ingestSources(
         await ingestOne(source.uri, () => fetchUrlDocument({ workspacePath, source, url: source.uri, previous: previous.get(stableId("doc", source.id, source.uri)) }));
       } else if (source.type === "website") {
         reportProgress(progress, `Crawling ${source.uri}`);
-        const urls = await crawlWebsite(source);
+        const urls = await crawlWebsite(source, {
+          userAgent: defaultUserAgent,
+          rateLimitMs: defaultRateLimitMs,
+          maxConcurrentRequests
+        }, progress);
         reportProgress(progress, `Fetched ${urls.length} page${urls.length === 1 ? "" : "s"} from crawl`);
-        for (const url of urls) {
+        const seenCanonicalUrls = new Set<string>();
+        await mapWithConcurrency(urls, maxConcurrentRequests, async (url) => {
+          if (seenCanonicalUrls.has(url)) {
+            reportProgressDetail(progress, `Skipped canonical duplicate ${url}`);
+            return;
+          }
           reportProgress(progress, `Fetching ${url}`);
-          await ingestOne(url, () => fetchUrlDocument({ workspacePath, source, url, previous: previous.get(stableId("doc", source.id, url)) }));
-        }
+          const document = await ingestOne(url, () => fetchUrlDocument({ workspacePath, source, url, previous: previous.get(stableId("doc", source.id, url)) }));
+          if (document) {
+            seenCanonicalUrls.add(document.uri);
+          }
+        });
       } else if (source.type === "rss") {
         reportProgress(progress, `Fetching feed ${source.uri}`);
         const result = await ingestRssSource({
@@ -252,6 +286,7 @@ export async function ingestSources(
           source,
           previous,
           nextDocuments,
+          maxConcurrentRequests,
           onDocumentProcessed: reportDocumentOutcome,
           onFailure: (uri, error) => {
             failures.push({
