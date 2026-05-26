@@ -111,6 +111,7 @@ describe("ingest, chunk, index, query", () => {
   it("writes stable index state that can be reloaded for search", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
       {
         id: "chunk1",
@@ -184,6 +185,7 @@ describe("ingest, chunk, index, query", () => {
   it("prefers a specific article page over an aggregate page when both match", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
       {
         id: "chunk-aggregate",
@@ -244,6 +246,7 @@ describe("ingest, chunk, index, query", () => {
   it("collapses fragment-only duplicate search results for the same document", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
       {
         id: "chunk-base",
