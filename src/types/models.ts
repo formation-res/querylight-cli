@@ -246,9 +246,46 @@ export type SearchResult = {
   metadata: Record<string, unknown>;
 };
 
+export type SearchHitSource = {
+  chunkId: string;
+  documentId: string;
+  sourceId: string;
+  sourceType: SourceType;
+  sourceName?: string;
+  title: string;
+  uri: string;
+  headingPath: string[];
+  text: string;
+  snippet?: string;
+  normalizedPath?: string;
+  publicationDate?: string | null;
+  crawledAt?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastChangedAt: string;
+  metadata: Record<string, unknown>;
+};
+
+export type SearchHit = {
+  _index: string;
+  _id: string;
+  _score: number;
+  _source: SearchHitSource;
+  highlight?: Record<string, string[]>;
+};
+
 export type SearchResponseData = {
   retrievalMode?: RetrievalMode;
-  results: SearchResult[];
+  took: number;
+  hits: {
+    total: {
+      value: number;
+      relation: "eq";
+    };
+    max_score: number | null;
+    hits: SearchHit[];
+  };
+  aggregations?: Record<string, unknown>;
 };
 
 export type RelatedDocumentResult = {

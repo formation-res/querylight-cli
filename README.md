@@ -23,7 +23,7 @@ It is designed for local, inspectable workflows:
 Run without installing globally:
 
 ```bash
-bunx @tryformation/querylight-cli init
+bunx --bun @tryformation/querylight-cli init
 ```
 
 For agent and Python automation examples that use `bunx` and `uv`, see [`examples/skills/qli-bunx-uv/SKILL.md`](https://github.com/formation-res/querylight-cli/blob/main/examples/skills/qli-bunx-uv/SKILL.md).
@@ -43,8 +43,10 @@ npx qli --help
 If you prefer to avoid a local install, use:
 
 ```bash
-bunx @tryformation/querylight-cli --help
+bunx --bun @tryformation/querylight-cli --help
 ```
+
+Use `bunx --bun` for repeated or concurrent `bunx` calls. `bunx` respects the CLI shebang by default and otherwise starts `qli` through `node`.
 
 ## Release
 
@@ -105,6 +107,7 @@ Search it:
 ```bash
 qli search "API authentication"
 qli search --source-type rss --since 2026-05-01 --has-publication-date
+qli search-json '{"query":{"match":{"text":"API authentication"}},"size":5}'
 ```
 
 Find related documents for an existing one:
@@ -127,7 +130,7 @@ The repository includes an example skill for running `qli` without a global inst
 
 It covers:
 
-- running `qli` with `bunx @tryformation/querylight-cli`
+- running `qli` with `bunx --bun @tryformation/querylight-cli`
 - using `--json` for automation and agents
 - calling `qli search` and `qli context` from Python with `subprocess`
 
@@ -361,6 +364,7 @@ qli search --source-type rss,page --since 2026-05-01 --has-publication-date --to
 qli search --source-name "Release Feed,Company Blog" --uri-prefix https://example.com/news,https://example.com/blog
 qli search --source-type rss,page --top-k 25 --json
 qli search "authentication" --json
+qli search-json '{"query":{"bool":{"filter":[{"term":{"sourceType":"rss"}}]}},"size":10}' --json
 ```
 
 Build retrieval context:

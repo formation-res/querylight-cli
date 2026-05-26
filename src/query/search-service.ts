@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
-import { BoolQuery, MatchQuery, OP, TermQuery, reciprocalRankFusion, type DocumentIndex } from "@tryformation/querylight-ts";
+import { BoolQuery, MatchQuery, OP, reciprocalRankFusion, searchJsonDsl, type DocumentIndex, type JsonDslRequest, type JsonDslResponse } from "@tryformation/querylight-ts";
 import path from "node:path";
 import { buildChunksForDocument } from "../chunk/chunker.js";
 import { loadConfig } from "../core/config.js";
 import { CliError, ExitCode } from "../core/errors.js";
 import { fileExists } from "../core/files.js";
 import { readJsonl } from "../core/jsonl.js";
-import type { ChunkRecord, DocumentRecord, RetrievalMode, SearchResponseData, SearchResult, Source, WorkspaceConfig } from "../types/models.js";
+import type { ChunkRecord, DocumentRecord, RetrievalMode, SearchHit, SearchHitSource, SearchResponseData, SearchResult, Source, WorkspaceConfig } from "../types/models.js";
 import { readLatestIndexState } from "../index/index-store.js";
 import { createIndexMapping } from "../index/querylight-indexer.js";
 import { denseQuery } from "../vector/dense.js";
@@ -65,28 +65,6 @@ function matchesPrefix(value: string, prefixes: string[]): boolean {
   }
   const lower = value.toLowerCase();
   return prefixes.some((prefix) => lower.startsWith(prefix));
-}
-
-function buildSearchQuery(
-  query: string,
-  filters: SearchFilters
-): BoolQuery {
-  const sourceIds = normalizeFilterValues([filters.sourceId, ...(filters.sourceIds ?? [])].filter((value): value is string => Boolean(value)));
-  const sourceTypes = normalizeFilterValues([filters.sourceType, ...(filters.sourceTypes ?? [])].filter((value): value is string => Boolean(value)));
-  const tags = normalizeFilterValues([filters.tag, ...(filters.tags ?? [])].filter((value): value is string => Boolean(value)));
-  return new BoolQuery({
-    should: [
-      new MatchQuery({ field: "title", text: query, operation: OP.AND, boost: 6 }),
-      new MatchQuery({ field: "text", text: query, operation: OP.AND, boost: 4 }),
-      new MatchQuery({ field: "text", text: query, operation: OP.OR, boost: 2 })
-    ],
-    filter: [
-      ...(sourceIds.length === 1 ? [new TermQuery({ field: "sourceId", text: sourceIds[0]! })] : []),
-      ...(sourceTypes.length === 1 ? [new TermQuery({ field: "sourceType", text: sourceTypes[0]! })] : []),
-      ...(tags.length === 1 ? [new TermQuery({ field: "tags", text: tags[0]! })] : []),
-      ...(filters.metadata ?? []).map(({ key, value }) => new TermQuery({ field: `metadata.${key}`, text: value.toLowerCase() }))
-    ]
-  });
 }
 
 function isValidDate(value: string | undefined): value is string {
@@ -360,6 +338,211 @@ async function buildSnippetWithAdjacentChunks(
   return buildExpandedParagraphSnippet(paragraphs, currentIndex, query);
 }
 
+function buildSearchDslRequest(
+  {
+    query,
+    topK,
+    filters,
+    dateRanges
+  }: {
+    query: string;
+    topK: number;
+    filters: SearchFilters;
+    dateRanges: SearchDateRange[];
+  }
+): JsonDslRequest {
+  const filterClauses: Array<Record<string, unknown>> = [];
+  const sourceIds = normalizeFilterValues([filters.sourceId, ...(filters.sourceIds ?? [])].filter((value): value is string => Boolean(value)));
+  const sourceNames = normalizeFilterValues([filters.sourceName, ...(filters.sourceNames ?? [])].filter((value): value is string => Boolean(value)));
+  const sourceTypes = normalizeFilterValues([filters.sourceType, ...(filters.sourceTypes ?? [])].filter((value): value is string => Boolean(value)));
+  const uriPrefixes = normalizeFilterValues([filters.uriPrefix, ...(filters.uriPrefixes ?? [])].filter((value): value is string => Boolean(value)));
+  const tags = normalizeFilterValues([filters.tag, ...(filters.tags ?? [])].filter((value): value is string => Boolean(value)));
+
+  if (sourceIds.length > 0) {
+    filterClauses.push({ terms: { sourceId: sourceIds } });
+  }
+  if (sourceNames.length > 0) {
+    filterClauses.push({ terms: { sourceName: sourceNames } });
+  }
+  if (sourceTypes.length > 0) {
+    filterClauses.push({ terms: { sourceType: sourceTypes } });
+  }
+  if (uriPrefixes.length > 0) {
+    filterClauses.push({
+      bool: {
+        should: uriPrefixes.map((prefix) => ({ prefix: { uri: prefix } })),
+        minimum_should_match: 1
+      }
+    });
+  }
+  if (tags.length > 0) {
+    filterClauses.push({ terms: { tags } });
+  }
+  if (filters.hasPublicationDate) {
+    filterClauses.push({ exists: { field: "publicationDate" } });
+  }
+  for (const { key, value } of filters.metadata ?? []) {
+    filterClauses.push({ term: { [`metadata.${key}`]: value.toLowerCase() } });
+  }
+  for (const { field, from, to } of dateRanges) {
+    filterClauses.push({
+      range: {
+        [field]: {
+          ...(from ? { gte: from } : {}),
+          ...(to ? { lte: to } : {})
+        }
+      }
+    });
+  }
+
+  return {
+    size: topK,
+    query: {
+      bool: {
+        should: [
+          { match: { title: { query, operator: "and", boost: 6 } } },
+          { match: { text: { query, operator: "and", boost: 4 } } },
+          { match: { text: { query, operator: "or", boost: 2 } } }
+        ],
+        filter: filterClauses,
+        minimum_should_match: 1
+      }
+    }
+  };
+}
+
+function sourceToChunkRecord(source: SearchHitSource): ChunkRecord {
+  return {
+    id: source.chunkId,
+    documentId: source.documentId,
+    sourceId: source.sourceId,
+    title: source.title,
+    uri: source.uri,
+    headingPath: source.headingPath,
+    text: source.text,
+    contentHash: "",
+    metadata: source.metadata as ChunkRecord["metadata"],
+    firstSeenAt: source.firstSeenAt,
+    lastSeenAt: source.lastSeenAt,
+    lastChangedAt: source.lastChangedAt
+  };
+}
+
+function sourceToDocumentRecord(source: SearchHitSource): DocumentRecord {
+  return {
+    id: source.documentId,
+    sourceId: source.sourceId,
+    sourceType: source.sourceType,
+    title: source.title,
+    uri: source.uri,
+    sourceUri: source.uri,
+    mimeType: "text/plain",
+    normalizedPath: source.normalizedPath ?? "",
+    contentHash: "",
+    metadata: source.metadata as DocumentRecord["metadata"],
+    publicationDate: source.publicationDate ?? null,
+    crawledAt: source.crawledAt,
+    firstSeenAt: source.firstSeenAt,
+    lastSeenAt: source.lastSeenAt,
+    lastChangedAt: source.lastChangedAt
+  };
+}
+
+type MaterializedSearchHit = {
+  hit: SearchHit;
+  result: SearchResult;
+};
+
+async function materializeSearchHit(
+  hit: SearchHit,
+  query: string,
+  config: WorkspaceConfig,
+  orderedChunkCache: Map<string, ChunkRecord[]>,
+  showChunks: boolean
+): Promise<MaterializedSearchHit> {
+  const source = hit._source;
+  const chunk = sourceToChunkRecord(source);
+  const document = sourceToDocumentRecord(source);
+  const snippet = await buildSnippetWithAdjacentChunks(chunk, query, { document, config, orderedChunkCache });
+  const enrichedSource: SearchHitSource = {
+    ...source,
+    snippet
+  };
+  const result: SearchResult = {
+    chunkId: source.chunkId,
+    documentId: source.documentId,
+    sourceId: source.sourceId,
+    sourceType: source.sourceType,
+    score: hit._score,
+    title: chooseResultTitle(chunk),
+    uri: source.uri,
+    snippet,
+    text: showChunks ? source.text : undefined,
+    publicationDate: source.publicationDate ?? null,
+    firstSeenAt: source.firstSeenAt,
+    lastSeenAt: source.lastSeenAt,
+    lastChangedAt: source.lastChangedAt,
+    metadata: source.metadata
+  };
+  return {
+    hit: {
+      ...hit,
+      _source: enrichedSource
+    },
+    result
+  };
+}
+
+function createSearchResponse(retrievalMode: RetrievalMode, hits: SearchHit[], took: number, aggregations?: Record<string, unknown>): SearchResponseData {
+  return {
+    retrievalMode,
+    took,
+    hits: {
+      total: {
+        value: hits.length,
+        relation: "eq"
+      },
+      max_score: hits.length > 0 ? Math.max(...hits.map((hit) => hit._score)) : null,
+      hits
+    },
+    aggregations
+  };
+}
+
+export function searchResultsFromResponse(response: SearchResponseData, showChunks = false): SearchResult[] {
+  return response.hits.hits.map((hit) => ({
+    chunkId: hit._source.chunkId,
+    documentId: hit._source.documentId,
+    sourceId: hit._source.sourceId,
+    sourceType: hit._source.sourceType,
+    score: hit._score,
+    title: chooseResultTitle(sourceToChunkRecord(hit._source)),
+    uri: hit._source.uri,
+    snippet: hit._source.snippet ?? hit.highlight?.text?.join("\n\n") ?? buildSnippet(hit._source.text, hit._source.title),
+    text: showChunks ? hit._source.text : undefined,
+    publicationDate: hit._source.publicationDate ?? null,
+    firstSeenAt: hit._source.firstSeenAt,
+    lastSeenAt: hit._source.lastSeenAt,
+    lastChangedAt: hit._source.lastChangedAt,
+    metadata: hit._source.metadata
+  }));
+}
+
+export async function searchJsonIndex(
+  {
+    workspacePath,
+    request,
+    indexName = "querylight"
+  }: {
+    workspacePath: string;
+    request: JsonDslRequest;
+    indexName?: string;
+  }
+): Promise<JsonDslResponse> {
+  const index = await loadHydratedIndex(workspacePath);
+  return searchJsonDsl({ index, request, indexName });
+}
+
 function normalizeDisplayTitle(title: string): string {
   return title
     .replace(/\s*\|\s*Querylight TS Demo\s*$/i, "")
@@ -551,6 +734,7 @@ export async function searchIndex(
     showChunks?: boolean;
   }
 ): Promise<SearchResponseData> {
+  const startedAt = Date.now();
   const config = await loadConfig(workspacePath);
   const mode = retrievalMode ?? config.retrieval.defaultMode;
   const candidateLimit = Math.max(topK * 5, 50);
@@ -614,13 +798,51 @@ export async function searchIndex(
           } satisfies SearchResult;
         })
     );
-    return { retrievalMode: "lexical", results: latestResults.filter((result): result is SearchResult => result != null) };
+    const hits: SearchHit[] = latestResults
+      .filter((result): result is SearchResult => result != null)
+      .map((result) => {
+        const chunk = chunks.get(result.chunkId)!;
+        const document = documents.get(result.documentId)!;
+        const source = sources.get(result.sourceId);
+        return {
+          _index: "querylight",
+          _id: result.chunkId,
+          _score: result.score,
+          _source: {
+            chunkId: result.chunkId,
+            documentId: result.documentId,
+            sourceId: result.sourceId,
+            sourceType: result.sourceType,
+            sourceName: source?.name,
+            title: chunk.title,
+            uri: result.uri,
+            headingPath: chunk.headingPath,
+            text: chunk.text,
+            snippet: result.snippet,
+            normalizedPath: document.normalizedPath,
+            publicationDate: result.publicationDate ?? null,
+            crawledAt: document.crawledAt,
+            firstSeenAt: result.firstSeenAt,
+            lastSeenAt: result.lastSeenAt,
+            lastChangedAt: result.lastChangedAt,
+            metadata: result.metadata
+          }
+        };
+      });
+    return createSearchResponse("lexical", hits, Date.now() - startedAt);
   }
 
   const lexicalHits = async () => {
-    const index = await loadHydratedIndex(workspacePath);
-    const all = await index.searchRequest({ query: buildSearchQuery(normalizedQuery, { sourceId, sourceIds, sourceType, sourceTypes, tag, tags, metadata }), limit: candidateLimit });
-    return all.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit);
+    const response = await searchJsonIndex({
+      workspacePath,
+      request: buildSearchDslRequest({
+        query: normalizedQuery,
+        topK: candidateLimit,
+        filters: { sourceId, sourceIds, sourceName, sourceNames, sourceType, sourceTypes, uriPrefix, uriPrefixes, hasPublicationDate, tag, tags, metadata },
+        dateRanges
+      })
+    });
+    return response.hits.hits as SearchHit[];
   };
 
   const denseHits = async () => {
@@ -637,15 +859,18 @@ export async function searchIndex(
     return sparseQuery({ workspacePath, config: config.retrieval.sparse, query: normalizedQuery, topK: candidateLimit }).then((hits) => hits.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit));
   };
 
+  let lexicalResponseHits: SearchHit[] = [];
   let hits: Array<[string, number]>;
   if (mode === "lexical") {
-    hits = await lexicalHits();
+    lexicalResponseHits = await lexicalHits();
+    hits = lexicalResponseHits.map((hit) => [hit._id, hit._score]);
   } else if (mode === "dense") {
     hits = await denseHits();
   } else if (mode === "sparse") {
     hits = await sparseHits();
   } else {
-    const rankings: Array<Array<[string, number]>> = [await lexicalHits()];
+    lexicalResponseHits = await lexicalHits();
+    const rankings: Array<Array<[string, number]>> = [lexicalResponseHits.map((hit) => [hit._id, hit._score])];
     if (await fileExists(denseVectorPath(workspacePath))) {
       rankings.push(await denseQuery({ workspacePath, config: config.retrieval.dense, query: normalizedQuery, topK: candidateLimit }).then((dense) => dense.filter(([chunkId]) => filterIds.includes(chunkId)).slice(0, candidateLimit)));
     }
@@ -655,32 +880,56 @@ export async function searchIndex(
     hits = reciprocalRankFusion(rankings, { rankConstant: 20, weights: rankings.map((_, index) => index === 0 ? 3 : 1) }).slice(0, candidateLimit);
   }
 
-  const rawResults: Array<SearchResult | null> = await Promise.all(hits.map(async ([chunkId, score]) => {
-    const chunk = chunks.get(chunkId);
-    if (!chunk) {
-      return null;
-    }
-    return {
-      chunkId,
-      documentId: chunk.documentId,
-      sourceId: chunk.sourceId,
-      sourceType: documents.get(chunk.documentId)?.sourceType ?? "text",
-      score,
-      title: chooseResultTitle(chunk),
-      uri: chunk.uri,
-      snippet: await buildSnippetWithAdjacentChunks(chunk, normalizedQuery, {
-        document: documents.get(chunk.documentId),
-        config,
-        orderedChunkCache
-      }),
-      text: showChunks ? chunk.text : undefined,
-      publicationDate: documents.get(chunk.documentId)?.publicationDate ?? null,
-      firstSeenAt: documents.get(chunk.documentId)?.firstSeenAt ?? chunk.firstSeenAt,
-      lastSeenAt: documents.get(chunk.documentId)?.lastSeenAt ?? chunk.lastSeenAt,
-      lastChangedAt: documents.get(chunk.documentId)?.lastChangedAt ?? chunk.lastChangedAt,
-      metadata: chunk.metadata
-    } satisfies SearchResult;
-  }));
-  const results = rawResults.filter((result): result is SearchResult => result != null);
-  return { retrievalMode: mode, results: rerankResultsByDocument(results, topK) };
+  const baseHits: SearchHit[] = mode === "lexical"
+    ? lexicalResponseHits
+    : hits.flatMap(([chunkId, score]) => {
+        const chunk = chunks.get(chunkId);
+        if (!chunk) {
+          return [];
+        }
+        const document = documents.get(chunk.documentId);
+        const source = sources.get(chunk.sourceId);
+        return [{
+          _index: "querylight",
+          _id: chunkId,
+          _score: score,
+          _source: {
+            chunkId,
+            documentId: chunk.documentId,
+            sourceId: chunk.sourceId,
+            sourceType: document?.sourceType ?? "text",
+            sourceName: source?.name,
+            title: chunk.title,
+            uri: chunk.uri,
+            headingPath: chunk.headingPath,
+            text: chunk.text,
+            normalizedPath: document?.normalizedPath,
+            publicationDate: document?.publicationDate ?? null,
+            crawledAt: document?.crawledAt,
+            firstSeenAt: document?.firstSeenAt ?? chunk.firstSeenAt,
+            lastSeenAt: document?.lastSeenAt ?? chunk.lastSeenAt,
+            lastChangedAt: document?.lastChangedAt ?? chunk.lastChangedAt,
+            metadata: chunk.metadata
+          }
+        }];
+      });
+
+  const materialized = await Promise.all(baseHits.map((hit) => materializeSearchHit(hit, normalizedQuery, config, orderedChunkCache, showChunks)));
+  if (showChunks) {
+    const topHits = materialized
+      .sort((left, right) => right.result.score - left.result.score)
+      .slice(0, topK)
+      .map(({ hit, result }) => ({ ...hit, _score: result.score }));
+    return createSearchResponse(mode, topHits, Date.now() - startedAt);
+  }
+
+  const reranked = rerankResultsByDocument(materialized.map(({ result }) => result), topK);
+  const byChunkId = new Map(materialized.map(({ hit }) => [hit._id, hit]));
+  const finalHits = reranked
+    .map((result) => {
+      const hit = byChunkId.get(result.chunkId);
+      return hit ? { ...hit, _score: result.score, _source: { ...hit._source, snippet: result.snippet } } : null;
+    })
+    .filter((hit): hit is NonNullable<typeof hit> => hit != null);
+  return createSearchResponse(mode, finalHits, Date.now() - startedAt);
 }

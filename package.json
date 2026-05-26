@@ -1,6 +1,6 @@
 {
   "name": "@tryformation/querylight-cli",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Querylight CLI for building and querying local knowledge bases.",
   "license": "MIT",
   "homepage": "https://github.com/formation-res/querylight-cli#readme",
@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
-    "@tryformation/querylight-ts": "^0.10.0",
+    "@tryformation/querylight-ts": "^0.11.0",
     "cheerio": "^1.2.0",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.3",

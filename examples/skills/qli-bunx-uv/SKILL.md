@@ -5,7 +5,7 @@ description: Use Querylight CLI from Bun and Python automation without installin
 
 # qli with bunx and uv
 
-Use this skill when you need to run `qli` from a temporary Node toolchain and call it from Python automation.
+Use this skill when you need to run `qli` from Bun and call it from Python automation.
 
 ## When to use this
 
@@ -21,23 +21,24 @@ Use this skill when you need to run `qli` from a temporary Node toolchain and ca
 
 ## Command form
 
-Use `bunx @tryformation/querylight-cli` when the `qli` binary is not already available on `PATH`.
+Use `bunx --bun @tryformation/querylight-cli` when the `qli` binary is not already available on `PATH`.
+Use this form for concurrent queries as well.
 
 Examples:
 
 ```bash
-bunx @tryformation/querylight-cli --help
-bunx @tryformation/querylight-cli init
-bunx @tryformation/querylight-cli source add directory ./docs --name "Local Docs" --tag docs
-bunx @tryformation/querylight-cli rebuild
-bunx @tryformation/querylight-cli search "api authentication"
+bunx --bun @tryformation/querylight-cli --help
+bunx --bun @tryformation/querylight-cli init
+bunx --bun @tryformation/querylight-cli source add directory ./docs --name "Local Docs" --tag docs
+bunx --bun @tryformation/querylight-cli rebuild
+bunx --bun @tryformation/querylight-cli search "api authentication"
 ```
 
 Use `--json` for scripts, agents, and Python callers:
 
 ```bash
-bunx @tryformation/querylight-cli search "api authentication" --top-k 8 --json
-bunx @tryformation/querylight-cli context "How do API keys work?" --top-k 8 --json
+bunx --bun @tryformation/querylight-cli search "api authentication" --top-k 8 --json
+bunx --bun @tryformation/querylight-cli context "How do API keys work?" --top-k 8 --json
 ```
 
 ## Python with uv
@@ -57,6 +58,7 @@ import subprocess
 
 cmd = [
     "bunx",
+    "--bun",
     "@tryformation/querylight-cli",
     "search",
     "api authentication",
@@ -81,6 +83,7 @@ import subprocess
 workspace = "/absolute/path/to/project/.kb"
 cmd = [
     "bunx",
+    "--bun",
     "@tryformation/querylight-cli",
     "--workspace",
     workspace,
@@ -107,15 +110,16 @@ PY
 Example:
 
 ```bash
-bunx @tryformation/querylight-cli init
-bunx @tryformation/querylight-cli source add directory ./docs --name "Local Docs" --tag docs
-bunx @tryformation/querylight-cli rebuild
+bunx --bun @tryformation/querylight-cli init
+bunx --bun @tryformation/querylight-cli source add directory ./docs --name "Local Docs" --tag docs
+bunx --bun @tryformation/querylight-cli rebuild
 uv run python - <<'PY'
 import json
 import subprocess
 
 cmd = [
     "bunx",
+    "--bun",
     "@tryformation/querylight-cli",
     "context",
     "How do API keys work?",
@@ -133,6 +137,7 @@ PY
 ## Notes
 
 - `qli` defaults to the `.kb` workspace in the current directory.
+- Prefer `bunx --bun` over plain `bunx` when several `qli` commands may start at the same time.
 - Pass `--workspace` when the Python process runs outside the knowledge base root.
 - `search`, `related`, and `context` are the common commands for agent and script integration.
 - Run `rebuild` before querying if the workspace has not been indexed yet.

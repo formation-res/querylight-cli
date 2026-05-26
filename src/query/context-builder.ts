@@ -1,5 +1,5 @@
 import type { ContextResponseData, ContextSource } from "../types/models.js";
-import { searchIndex } from "./search-service.js";
+import { searchIndex, searchResultsFromResponse } from "./search-service.js";
 
 export async function createContext(
   {
@@ -17,9 +17,10 @@ export async function createContext(
   }
 ): Promise<ContextResponseData> {
   const search = await searchIndex({ workspacePath, query, topK, showChunks: true, retrievalMode });
+  const results = searchResultsFromResponse(search, true);
   const sources: ContextSource[] = [];
   let total = 0;
-  for (const result of search.results) {
+  for (const result of results) {
     const text = result.text ?? "";
     if (total + text.length > maxChars && sources.length > 0) {
       break;

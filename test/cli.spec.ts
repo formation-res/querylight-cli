@@ -61,7 +61,7 @@ describe("cli json output", () => {
     const search = await runCli(["search", "authentication", "--workspace", workspace, "--json"]);
     const searchParsed = JSON.parse(search.stdout);
     expect(searchParsed.ok).toBe(true);
-    expect(searchParsed.data.results[0].title).toContain("API Authentication");
+    expect(searchParsed.data.hits.hits[0]._source.title).toContain("API Authentication");
   });
 
   it("returns related documents from the CLI", async () => {
@@ -347,7 +347,42 @@ describe("cli json output", () => {
 
     expect(search.exitCode).toBe(0);
     expect(parsed.ok).toBe(true);
-    expect(parsed.data.results.length).toBeGreaterThan(0);
+    expect(parsed.data.hits.hits.length).toBeGreaterThan(0);
+  });
+
+  it("returns raw JSON DSL hits through search-json", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
+    await runCli([
+      "source",
+      "add",
+      "directory",
+      path.resolve("test-fixtures/docs"),
+      "--workspace",
+      workspace,
+      "--name",
+      "Local Docs"
+    ]);
+    await runCli(["ingest", "--workspace", workspace]);
+
+    const search = await runCli([
+      "search-json",
+      "{\"query\":{\"match\":{\"text\":\"authentication\"}},\"size\":3}",
+      "--workspace",
+      workspace,
+      "--json"
+    ]);
+    const parsed = JSON.parse(search.stdout);
+
+    expect(search.exitCode).toBe(0);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.command).toBe("search-json");
+    expect(parsed.data.hits.hits[0]._source.chunkId).toBeTruthy();
+    expect(parsed.data.hits.hits[0]._source.text.toLowerCase()).toContain("authentication");
   });
 
   it("renders search results with separators and omits heading breadcrumbs", async () => {
@@ -379,6 +414,6 @@ describe("cli json output", () => {
 
     const jsonSearch = await runCli(["search", "authentication", "--workspace", workspace, "--json"]);
     const parsed = JSON.parse(jsonSearch.stdout);
-    expect(parsed.data.results[0]).not.toHaveProperty("headingPath");
+    expect(parsed.data.hits.hits[0]._source.headingPath).toBeDefined();
   });
 });

@@ -6,7 +6,7 @@ import { loadConfig } from "../src/core/config.js";
 import { writeJsonl } from "../src/core/jsonl.js";
 import { buildIndex } from "../src/index/querylight-indexer.js";
 import { findRelatedDocuments } from "../src/query/related-service.js";
-import { searchIndex } from "../src/query/search-service.js";
+import { searchIndex, searchResultsFromResponse } from "../src/query/search-service.js";
 import { createContext } from "../src/query/context-builder.js";
 import { readDensePayload, readSparsePayload, writeDensePayload } from "../src/vector/store.js";
 import { createDenseChunkText, createSparseChunkText } from "../src/vector/text.js";
@@ -193,17 +193,17 @@ describe("vector helpers and retrieval", () => {
 
     const lexical = await searchIndex({ workspacePath, query: "bm25 ranking", topK: 5, retrievalMode: "lexical" });
     expect(lexical.retrievalMode).toBe("lexical");
-    expect(lexical.results[0]?.chunkId).toBe("chunk-bm25");
+    expect(searchResultsFromResponse(lexical)[0]?.chunkId).toBe("chunk-bm25");
 
     const dense = await searchIndex({ workspacePath, query: "bm25 ranking", topK: 5, retrievalMode: "dense" });
-    expect(dense.results[0]?.chunkId).toBe("chunk-bm25");
+    expect(searchResultsFromResponse(dense)[0]?.chunkId).toBe("chunk-bm25");
 
     const sparse = await searchIndex({ workspacePath, query: "sparse token weights", topK: 5, retrievalMode: "sparse" });
-    expect(sparse.results[0]?.chunkId).toBe("chunk-sparse");
+    expect(searchResultsFromResponse(sparse)[0]?.chunkId).toBe("chunk-sparse");
 
     const hybrid = await searchIndex({ workspacePath, query: "bm25 ranking", topK: 5, retrievalMode: "hybrid" });
     expect(hybrid.retrievalMode).toBe("hybrid");
-    expect(hybrid.results[0]?.chunkId).toBe("chunk-bm25");
+    expect(searchResultsFromResponse(hybrid)[0]?.chunkId).toBe("chunk-bm25");
 
     const context = await createContext({ workspacePath, query: "bm25 ranking", topK: 5, maxChars: 500, retrievalMode: "hybrid" });
     expect(context.retrievalMode).toBe("hybrid");
@@ -425,7 +425,7 @@ describe("vector helpers and retrieval", () => {
     });
 
     const dense = await searchIndex({ workspacePath, query: "bm25 ranking", topK: 5, retrievalMode: "dense" });
-    expect(dense.results[0]?.chunkId).toBe("chunk-bm25");
+    expect(searchResultsFromResponse(dense)[0]?.chunkId).toBe("chunk-bm25");
   });
 
 });

@@ -12,7 +12,7 @@ import { loadConfig } from "../src/core/config.js";
 import { buildIndex } from "../src/index/querylight-indexer.js";
 import { ingestSources } from "../src/ingest/ingest-service.js";
 import { createContext } from "../src/query/context-builder.js";
-import { searchIndex } from "../src/query/search-service.js";
+import { searchIndex, searchResultsFromResponse } from "../src/query/search-service.js";
 import { addSource } from "../src/sources/source-store.js";
 import { cleanupTempDirs, tempWorkspace } from "./helpers.js";
 
@@ -119,6 +119,7 @@ describe("pipeline behavior", () => {
   it("builds searchable indexes with source, tag, and metadata filters", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     const source = await addSource(workspacePath, {
       type: "directory",
       uri: docsDir,
@@ -135,10 +136,10 @@ describe("pipeline behavior", () => {
     await buildIndex({ workspacePath });
 
     const sourceFiltered = await searchIndex({ workspacePath, query: "authentication", topK: 5, sourceId: source.id });
-    expect(sourceFiltered.results.length).toBeGreaterThan(0);
+    expect(searchResultsFromResponse(sourceFiltered).length).toBeGreaterThan(0);
 
     const tagFiltered = await searchIndex({ workspacePath, query: "refund policy", topK: 5, tag: "support" });
-    expect(tagFiltered.results.length).toBeGreaterThan(0);
+    expect(searchResultsFromResponse(tagFiltered).length).toBeGreaterThan(0);
 
     const metadataFiltered = await searchIndex({
       workspacePath,
@@ -146,7 +147,7 @@ describe("pipeline behavior", () => {
       topK: 5,
       metadata: [{ key: "team", value: "success" }]
     });
-    expect(metadataFiltered.results.length).toBeGreaterThan(0);
+    expect(searchResultsFromResponse(metadataFiltered).length).toBeGreaterThan(0);
   });
 
   it("supports source, uri, and date filters and lists latest documents when query is omitted", async () => {
@@ -290,10 +291,11 @@ describe("pipeline behavior", () => {
       ]
     });
 
-    expect(latestRss.results).toHaveLength(1);
-    expect(latestRss.results[0]?.title).toBe("New Release");
-    expect(latestRss.results[0]?.sourceType).toBe("rss");
-    expect(latestRss.results[0]?.publicationDate).toBe("2026-05-17T09:00:00.000Z");
+    const results = searchResultsFromResponse(latestRss);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.title).toBe("New Release");
+    expect(results[0]?.sourceType).toBe("rss");
+    expect(results[0]?.publicationDate).toBe("2026-05-17T09:00:00.000Z");
   });
 
   it("creates bounded context blocks with chunk citations", async () => {

@@ -1,5 +1,5 @@
 import { Command, Option } from "commander";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { chunkDocuments } from "../chunk/chunker.js";
 import { DEFAULT_WORKSPACE, PACKAGE_VERSION } from "../core/constants.js";
@@ -9,7 +9,7 @@ import { assertWorkspaceExists, ensureWorkspace } from "../core/workspace.js";
 import { buildIndex } from "../index/querylight-indexer.js";
 import { ingestSources, reprocessDocuments } from "../ingest/ingest-service.js";
 import { discoverWebsiteFeed, type WebsiteFeedDiscovery } from "../ingest/adapters/website-feed-discovery.js";
-import { searchIndex } from "../query/search-service.js";
+import { searchIndex, searchJsonIndex } from "../query/search-service.js";
 import { findRelatedDocuments } from "../query/related-service.js";
 import { createContext } from "../query/context-builder.js";
 import { diffWorkspace, renderChangeReport } from "../report/diff-service.js";
@@ -386,6 +386,22 @@ function parseDateValue(input: string, optionName: string): string {
     throw new CliError(`invalid date for ${optionName}: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
   }
   return parsed.toISOString();
+}
+
+async function parseJsonArgument(input: string): Promise<Record<string, unknown>> {
+  const raw = input.startsWith("@")
+    ? await readFile(path.resolve(input.slice(1)), "utf8")
+    : input;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("expected a JSON object");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError(`invalid JSON request: ${message}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
 }
 
 function searchDateRanges(options: Record<string, string | undefined>): Array<{ field: SearchDateField; from?: string; to?: string }> {
@@ -848,7 +864,7 @@ Examples:
     });
 
   program.command("search")
-    .description("Search the built index and return ranked matching documents or chunks.")
+    .description("Search the built index and return ranked matching documents or chunks. Use search-json for raw JSON DSL queries.")
     .argument("[query]", "Text query. Omit it to list the latest matching documents.")
     .option("--top-k <n>", "Maximum number of results to return.", "12")
     .option("--source <sourceIds>", "Restrict results to one or more source ids. Use comma-separated values.")
@@ -886,6 +902,7 @@ Examples:
 Notes:
   lexical works without vector models.
   dense, sparse, and hybrid require the relevant index artifacts to exist.
+  Use search-json when you want the raw Querylight 0.11 JSON DSL and hit format.
   When you omit the query, qli returns the latest matching documents sorted by publication date.`)
     .action(async function command(query: string | undefined, options) {
       const global = this.optsWithGlobals();
@@ -905,7 +922,31 @@ Notes:
         retrievalMode: parseRetrievalMode(options.retrieval),
         showChunks: Boolean(options.showChunks)
       });
-      emit(global.json, capture, response("search", workspace, result), formatSearchResults(result.results));
+      emit(global.json, capture, response("search", workspace, result), formatSearchResults(result));
+    });
+
+  program.command("search-json")
+    .description("Run a raw Querylight 0.11 JSON DSL search request against the lexical index.")
+    .argument("<request>", "Inline JSON request or @path/to/request.json.")
+    .addHelpText("after", `
+Examples:
+  qli search-json '{"query":{"match":{"text":"authentication"}},"size":5}'
+  qli search-json @./search-request.json
+  qli search-json '{"query":{"bool":{"filter":[{"term":{"sourceType":"rss"}}]}},"aggs":{"types":{"terms":{"field":"sourceType","size":5}}}}' --json
+
+Notes:
+  search-json uses the lexical index and Querylight 0.11 JSON DSL fields.
+  Stored hit payloads are returned under _source.
+  Use --json when another tool needs the full response envelope.`)
+    .action(async function command(requestInput: string) {
+      const global = this.optsWithGlobals();
+      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const request = await parseJsonArgument(requestInput);
+      const result = await searchJsonIndex({
+        workspacePath: workspace,
+        request
+      });
+      emit(global.json, capture, response("search-json", workspace, result), JSON.stringify(result, null, 2));
     });
 
   program.command("related")

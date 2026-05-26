@@ -8,7 +8,7 @@ import { chunkDocuments } from "../src/chunk/chunker.js";
 import { ensureWorkspace } from "../src/core/workspace.js";
 import { writeJsonl } from "../src/core/jsonl.js";
 import { ingestSources } from "../src/ingest/ingest-service.js";
-import { searchIndex } from "../src/query/search-service.js";
+import { searchIndex, searchResultsFromResponse } from "../src/query/search-service.js";
 import { loadConfig } from "../src/core/config.js";
 import { addSource, listSources } from "../src/sources/source-store.js";
 import { createContext } from "../src/query/context-builder.js";
@@ -69,6 +69,7 @@ describe("ingest, chunk, index, query", () => {
   it("runs end to end for a local directory", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     const source = await addSource(workspacePath, {
       id: "src_local_docs",
       type: "directory",
@@ -95,7 +96,7 @@ describe("ingest, chunk, index, query", () => {
       query: "API authentication",
       topK: 5
     });
-    expect(search.results[0]?.title).toContain("API Authentication");
+    expect(searchResultsFromResponse(search)[0]?.title).toContain("API Authentication");
 
     const context = await createContext({
       workspacePath,
@@ -133,7 +134,7 @@ describe("ingest, chunk, index, query", () => {
     expect(latest).toBeTruthy();
 
     const search = await searchIndex({ workspacePath, query: "bearer token", topK: 5 });
-    expect(search.results[0]?.chunkId).toBe("chunk1");
+    expect(searchResultsFromResponse(search)[0]?.chunkId).toBe("chunk1");
     expect(build.metadata.indexHash.length).toBeGreaterThan(10);
   });
 
@@ -170,7 +171,7 @@ describe("ingest, chunk, index, query", () => {
     ]);
 
     const search = await searchIndex({ workspacePath, query: "bearer token", topK: 5 });
-    expect(search.results[0]?.chunkId).toBe("chunk1");
+    expect(searchResultsFromResponse(search)[0]?.chunkId).toBe("chunk1");
 
     await buildIndex({ workspacePath });
 
@@ -234,9 +235,10 @@ describe("ingest, chunk, index, query", () => {
     await buildIndex({ workspacePath });
 
     const search = await searchIndex({ workspacePath, query: "boostingquery soft demotion undesirable results", topK: 5 });
-    expect(search.results[0]?.documentId).toBe("doc-detail");
-    expect(search.results[0]?.uri).toBe("https://querylight.tryformation.com/docs/lexical-querying/boosting-query/");
-    expect(search.results.some((result) => result.documentId === "doc-aggregate" && result.title === "BoostingQuery for Soft Demotion Instead of Hard Exclusion")).toBe(false);
+    const results = searchResultsFromResponse(search);
+    expect(results[0]?.documentId).toBe("doc-detail");
+    expect(results[0]?.uri).toBe("https://querylight.tryformation.com/docs/lexical-querying/boosting-query/");
+    expect(results.some((result) => result.documentId === "doc-aggregate" && result.title === "BoostingQuery for Soft Demotion Instead of Hard Exclusion")).toBe(false);
   });
 
   it("collapses fragment-only duplicate search results for the same document", async () => {
@@ -278,8 +280,9 @@ describe("ingest, chunk, index, query", () => {
     await buildIndex({ workspacePath });
 
     const search = await searchIndex({ workspacePath, query: "custom AI implementation workflow bottleneck", topK: 5 });
-    expect(search.results.filter((result) => result.title === "Your Agentic Use Case")).toHaveLength(1);
-    expect(search.results[0]?.uri).toBe("https://formationxyz.com/services/your-agentic-use-case/");
+    const results = searchResultsFromResponse(search);
+    expect(results.filter((result) => result.title === "Your Agentic Use Case")).toHaveLength(1);
+    expect(results[0]?.uri).toBe("https://formationxyz.com/services/your-agentic-use-case/");
   });
 
   it("reports changed documents and markdown change reports", async () => {
