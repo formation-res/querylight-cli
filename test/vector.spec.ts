@@ -41,9 +41,44 @@ describe("vector helpers and retrieval", () => {
     expect(config.retrieval.defaultMode).toBe("lexical");
     expect(config.retrieval.dense.enabled).toBe(true);
     expect(config.retrieval.sparse.enabled).toBe(true);
-    expect(config.retrieval.dense.modelId).toBe("Xenova/all-MiniLM-L6-v2");
-    expect(config.retrieval.sparse.modelId).toBe("opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill");
+    expect(config.retrieval.dense.modelId).toBe("Xenova/paraphrase-MiniLM-L3-v2");
+    expect(config.retrieval.sparse.modelId).toBe("opensearch-project/opensearch-neural-sparse-encoding-doc-v2-mini");
     expect(config.retrieval.dense.cacheDir).toBe("~/.qli/models/huggingface");
+  });
+
+  it("disposes dense embedders after vector builds", async () => {
+    const root = await tempWorkspace("qli-vector-");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
+      {
+        id: "chunk1",
+        documentId: "doc1",
+        sourceId: "src1",
+        title: "Doc",
+        uri: "file:///doc.md",
+        headingPath: [],
+        text: "dense text",
+        contentHash: "c1",
+        metadata: {},
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    let disposed = false;
+    setDenseEmbedderFactoryForTests(async () => ({
+      async embed() {
+        return [1, 0, 0];
+      },
+      async dispose() {
+        disposed = true;
+      }
+    }));
+
+    await buildIndex({ workspacePath, denseOverride: true, sparseOverride: false });
+    expect(disposed).toBe(true);
   });
 
   it("builds dense and sparse chunk text from title heading and body", () => {

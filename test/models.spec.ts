@@ -73,18 +73,18 @@ describe("model commands", () => {
     process.env.QLI_HOME = path.join(root, ".qli-home");
     await ensureWorkspace({ workspacePath: workspace });
     await writeDensePullMarker(workspace, {
-      modelId: "Xenova/all-MiniLM-L6-v2",
+      modelId: "Xenova/paraphrase-MiniLM-L3-v2",
       cacheDir: "~/.qli/models/huggingface"
     }, { pulledAt: "2026-05-18T00:00:00.000Z" });
     await writeSparsePullMarker(workspace, {
-      modelId: "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill",
+      modelId: "opensearch-project/opensearch-neural-sparse-encoding-doc-v2-mini",
       cacheDir: "~/.qli/models/huggingface"
     }, { pulledAt: "2026-05-18T00:00:00.000Z" });
 
     const result = await runCli(["models", "status", "--workspace", workspace, "--json"]);
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout);
-    expect(parsed.data.dense.modelId).toBe("Xenova/all-MiniLM-L6-v2");
+    expect(parsed.data.dense.modelId).toBe("Xenova/paraphrase-MiniLM-L3-v2");
     expect(parsed.data.dense.available).toBe(true);
     expect(parsed.data.dense.cacheDir).toBe(path.join(root, ".qli-home", "models", "huggingface"));
     expect(typeof parsed.data.sparse.uvAvailable).toBe("boolean");

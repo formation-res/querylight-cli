@@ -121,7 +121,7 @@ describe("cli json output", () => {
     await runCli(["init", "--workspace", workspace]);
     await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: true\n  sparse:\n    enabled: false\n", "utf8");
     await writeDensePullMarker(workspace, {
-      modelId: "Xenova/all-MiniLM-L6-v2",
+      modelId: "Xenova/paraphrase-MiniLM-L3-v2",
       cacheDir: "~/.qli/models/huggingface"
     }, { pulledAt: "2026-05-18T00:00:00.000Z" });
     await runCli([

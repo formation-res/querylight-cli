@@ -103,6 +103,7 @@ describe("conditional remote ingest", () => {
           <a href="/pricing">Pricing</a>
           <a href="/?service=Starter">Starter</a>
           <a href="/podcast/index.xml">Podcast Feed</a>
+          <a href="/guide.pdf">Guide PDF</a>
           <a href="/search/">Search</a>
           <a href="/cdn-cgi/l/email-protection">Email</a>
         </main></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
@@ -126,6 +127,7 @@ describe("conditional remote ingest", () => {
     ]);
     expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/?service=Starter", expect.anything());
     expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/podcast/index.xml", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/guide.pdf", expect.anything());
     expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/search/", expect.anything());
     expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/cdn-cgi/l/email-protection", expect.anything());
   });

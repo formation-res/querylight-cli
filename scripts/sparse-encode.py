@@ -7,19 +7,40 @@ from huggingface_hub import hf_hub_download
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 
-def build_query_token_weight_vector(tokenizer, model_id: str):
-    local_cached_path = hf_hub_download(repo_id=model_id, filename="query_token_weights.txt")
-    vector = [0.0] * tokenizer.vocab_size
+def _load_query_weights_file(model_id: str, filename: str):
+    try:
+        return hf_hub_download(repo_id=model_id, filename=filename)
+    except Exception:
+        return None
 
-    with open(local_cached_path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            token, weight = line.split("\t", 1)
+
+def build_query_token_weight_vector(tokenizer, model_id: str):
+    vector = [0.0] * tokenizer.vocab_size
+    local_cached_path = _load_query_weights_file(model_id, "query_token_weights.txt")
+
+    if local_cached_path is not None:
+        with open(local_cached_path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                token, weight = line.split("\t", 1)
+                token_id = tokenizer._convert_token_to_id_with_added_voc(token)
+                if token_id is not None and token_id >= 0:
+                    vector[token_id] = float(weight)
+        return vector
+
+    local_cached_path = _load_query_weights_file(model_id, "idf.json")
+    if local_cached_path is not None:
+        with open(local_cached_path, encoding="utf-8") as handle:
+            idf = json.load(handle)
+        for token, weight in idf.items():
             token_id = tokenizer._convert_token_to_id_with_added_voc(token)
             if token_id is not None and token_id >= 0:
                 vector[token_id] = float(weight)
+        return vector
+
+    raise FileNotFoundError(f"missing query token weights for {model_id}: expected query_token_weights.txt or idf.json")
 
     return vector
 

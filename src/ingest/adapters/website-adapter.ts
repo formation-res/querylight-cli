@@ -42,13 +42,17 @@ function isAllowed(url: URL, baseUrl: URL, includePatterns: string[], excludePat
   if (url.search.length > 0) {
     return false;
   }
-  if (url.pathname.endsWith(".xml")) {
+  const pathname = url.pathname.toLowerCase();
+  if (pathname.endsWith(".xml")) {
     return false;
   }
-  if (url.pathname.includes("/cdn-cgi/")) {
+  if (pathname.endsWith(".pdf")) {
     return false;
   }
-  if (url.pathname === "/search" || url.pathname === "/search/" || url.pathname.endsWith("/search/")) {
+  if (pathname.includes("/cdn-cgi/")) {
+    return false;
+  }
+  if (pathname === "/search" || pathname === "/search/" || pathname.endsWith("/search/")) {
     return false;
   }
   if (disallowRules.some((rule) => rule !== "/" && url.pathname.startsWith(rule))) {

@@ -38,7 +38,7 @@ export const defaultConfig = (): WorkspaceConfig => ({
     defaultMode: "lexical",
     dense: {
       enabled: true,
-      modelId: "Xenova/all-MiniLM-L6-v2",
+      modelId: "Xenova/paraphrase-MiniLM-L3-v2",
       cacheDir: DEFAULT_SHARED_MODEL_CACHE_DIR,
       indexHashTables: 8,
       indexRandomSeed: 42,
@@ -46,7 +46,7 @@ export const defaultConfig = (): WorkspaceConfig => ({
     },
     sparse: {
       enabled: true,
-      modelId: "opensearch-project/opensearch-neural-sparse-encoding-doc-v3-distill",
+      modelId: "opensearch-project/opensearch-neural-sparse-encoding-doc-v2-mini",
       cacheDir: DEFAULT_SHARED_MODEL_CACHE_DIR,
       documentTopTokens: 128,
       queryEncoding: "tokenizer-token-weights",
