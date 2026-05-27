@@ -14,7 +14,7 @@ import { sparseQuery } from "../vector/sparse.js";
 import { denseVectorPath, sparseVectorPath } from "../vector/store.js";
 import { normalizeRemoteUrl } from "../core/urls.js";
 
-async function loadHydratedIndex(workspacePath: string): Promise<DocumentIndex> {
+export async function loadHydratedIndex(workspacePath: string): Promise<DocumentIndex> {
   let state: object;
   try {
     state = await readLatestIndexState(workspacePath);
@@ -528,6 +528,20 @@ export function searchResultsFromResponse(response: SearchResponseData, showChun
   }));
 }
 
+export async function searchJsonRequest(
+  {
+    index,
+    request,
+    indexName = "querylight"
+  }: {
+    index: DocumentIndex;
+    request: JsonDslRequest;
+    indexName?: string;
+  }
+): Promise<JsonDslResponse> {
+  return searchJsonDsl({ index, request, indexName });
+}
+
 export async function searchJsonIndex(
   {
     workspacePath,
@@ -540,7 +554,7 @@ export async function searchJsonIndex(
   }
 ): Promise<JsonDslResponse> {
   const index = await loadHydratedIndex(workspacePath);
-  return searchJsonDsl({ index, request, indexName });
+  return searchJsonRequest({ index, request, indexName });
 }
 
 function normalizeDisplayTitle(title: string): string {

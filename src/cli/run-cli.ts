@@ -10,6 +10,7 @@ import { buildIndex } from "../index/querylight-indexer.js";
 import { ingestSources, reprocessDocuments } from "../ingest/ingest-service.js";
 import { discoverWebsiteFeed, type WebsiteFeedDiscovery } from "../ingest/adapters/website-feed-discovery.js";
 import { searchIndex, searchJsonIndex } from "../query/search-service.js";
+import { startSearchApiServer } from "../server/search-api.js";
 import { findRelatedDocuments } from "../query/related-service.js";
 import { createContext } from "../query/context-builder.js";
 import { diffWorkspace, renderChangeReport } from "../report/diff-service.js";
@@ -947,6 +948,70 @@ Notes:
         request
       });
       emit(global.json, capture, response("search-json", workspace, result), JSON.stringify(result, null, 2));
+    });
+
+  program.command("serve")
+    .description("Start a small HTTP API that exposes Querylight JSON DSL search through an OpenSearch-like _search endpoint.")
+    .option("--host <host>", "Host interface to bind. Defaults to 127.0.0.1.", "127.0.0.1")
+    .option("--port <n>", "Port to bind. Use 0 to let the OS choose a free port.", "3000")
+    .addHelpText("after", `
+Examples:
+  qli serve
+  qli serve --workspace ./docs/.kb --port 4000
+  qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
+
+Routes:
+  Single workspace: POST /_search
+  Single workspace: POST /<configured-index-name>/_search
+  Multi-KB root: POST /<directory-name>/_search
+
+Notes:
+  The request body must be a Querylight JSON DSL object.
+  serve only exposes lexical _search for now.
+  When --workspace points to a directory of knowledge bases, each child directory must contain its own .kb workspace.
+  Index files are loaded once at startup and reused across requests.`)
+    .action(async function command(options) {
+      const global = this.optsWithGlobals();
+      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const port = Number(options.port);
+      if (!Number.isInteger(port) || port < 0 || port > 65535) {
+        throw new CliError(`invalid port: ${options.port}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+      }
+      const server = await startSearchApiServer({
+        workspacePath: workspace,
+        host: options.host,
+        port
+      });
+      const data = {
+        url: server.url,
+        mode: server.mode,
+        knowledgeBases: server.knowledgeBases
+      };
+      const human = [
+        `Listening on ${server.url}`,
+        ...server.knowledgeBases.map((knowledgeBase) => `${knowledgeBase.route} -> ${knowledgeBase.workspacePath}`)
+      ].join("\n");
+      emit(global.json, capture, response("serve", workspace, data), human);
+
+      const shutdown = async () => {
+        for (const signal of ["SIGINT", "SIGTERM"] as const) {
+          process.off(signal, stop);
+        }
+        await server.close();
+      };
+      const stop = () => {
+        void shutdown().then(() => resolveStop(), rejectStop);
+      };
+      let resolveStop!: () => void;
+      let rejectStop!: (error: unknown) => void;
+      const waitForStop = new Promise<void>((resolve, reject) => {
+        resolveStop = resolve;
+        rejectStop = reject;
+      });
+      for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        process.once(signal, stop);
+      }
+      await waitForStop;
     });
 
   program.command("related")

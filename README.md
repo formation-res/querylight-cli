@@ -16,6 +16,7 @@ It is designed for local, inspectable workflows:
 - chunk documents for retrieval
 - build a portable local Querylight index
 - search and generate retrieval context for external agents and tools
+- serve an OpenSearch-like `_search` API over one or more local knowledge bases
 - inspect workspace state, diffs, and change reports
 
 ## Install
@@ -108,6 +109,9 @@ Search it:
 qli search "API authentication"
 qli search --source-type rss --since 2026-05-01 --has-publication-date
 qli search-json '{"query":{"match":{"text":"API authentication"}},"size":5}'
+curl -X POST http://127.0.0.1:3000/_search \
+  -H 'content-type: application/json' \
+  -d '{"query":{"match":{"text":"API authentication"}},"size":5}'
 ```
 
 Find related documents for an existing one:
@@ -121,6 +125,16 @@ Generate retrieval context:
 ```bash
 qli context "How do I authenticate API requests?" --top-k 8
 ```
+
+Serve the lexical index over HTTP:
+
+```bash
+qli serve
+```
+
+`qli serve` loads the current workspace index once at startup and reuses it for each request.
+Use `POST /_search` or `POST /<configured-index-name>/_search` for a single workspace.
+Use `POST /<directory-name>/_search` when `--workspace` points to a directory whose children each contain their own `.kb` workspace.
 
 ## Example Skill: `qli` with `bunx` and `uv`
 
@@ -373,6 +387,18 @@ Build retrieval context:
 qli context "How do I configure the API?"
 qli context "What changed in pricing?" --top-k 12 --max-chars 12000
 ```
+
+Serve the lexical index over HTTP:
+
+```bash
+qli serve
+qli serve --workspace ./docs/.kb --port 4000
+qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
+```
+
+For a single workspace, use `POST /_search` or `POST /<configured-index-name>/_search`.
+For a directory of knowledge bases, use `POST /<directory-name>/_search`.
+The request body must be a Querylight JSON DSL object.
 
 ### Change Inspection
 

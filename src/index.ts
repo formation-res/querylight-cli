@@ -6,6 +6,7 @@ export * from "./ingest/ingest-service.js";
 export * from "./chunk/chunker.js";
 export * from "./index/querylight-indexer.js";
 export * from "./query/search-service.js";
+export * from "./server/search-api.js";
 export * from "./query/related-service.js";
 export * from "./query/context-builder.js";
 export * from "./report/diff-service.js";
