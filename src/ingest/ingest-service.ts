@@ -87,7 +87,7 @@ async function purgeDocuments(
 async function fetchFeedText(source: Source): Promise<string> {
   const response = await fetch(source.uri, {
     headers: {
-      "user-agent": source.crawl?.userAgent ?? "querylight-cli/0.1"
+      "user-agent": source.crawl?.userAgent ?? "querylight-cli"
     }
   });
   if (!response.ok) {

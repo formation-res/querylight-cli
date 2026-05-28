@@ -55,12 +55,12 @@ export const defaultConfig = (): WorkspaceConfig => ({
     }
   },
   crawler: {
-    defaultUserAgent: "querylight-cli/0.1",
+    defaultUserAgent: "querylight-cli",
     obeyRobotsTxt: true,
     rateLimitMs: 1000,
     maxConcurrentRequests: 5,
     renderJs: false,
-    retentionDays: 365,
+    retentionDays: 30,
     fetchArticles: true
   },
   limits: {

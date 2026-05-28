@@ -94,7 +94,7 @@ describe("cli contracts", () => {
       "--json"
     ]);
     const addedParsed = JSON.parse(added.stdout);
-    expect(addedParsed.data.crawl.retentionDays).toBe(365);
+    expect(addedParsed.data.crawl.retentionDays).toBe(30);
     expect(addedParsed.data.crawl.maxConcurrentRequests).toBe(3);
     expect(addedParsed.data.crawl.fetchArticles).toBe(true);
 

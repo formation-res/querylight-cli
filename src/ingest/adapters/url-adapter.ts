@@ -129,7 +129,7 @@ export async function fetchUrlDocument(
   }: FetchRemoteDocumentOptions
 ): Promise<DocumentRecord> {
   const headers: Record<string, string> = {
-    "user-agent": source.crawl?.userAgent ?? "querylight-cli/0.1"
+    "user-agent": source.crawl?.userAgent ?? "querylight-cli"
   };
   if (previous?.httpCache?.etag) {
     headers["if-none-match"] = previous.httpCache.etag;
