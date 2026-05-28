@@ -34,6 +34,9 @@ export const defaultConfig = (): WorkspaceConfig => ({
     maxContextChars: 12000,
     citationStyle: "markdown"
   },
+  search: {
+    defaultTopK: 50
+  },
   retrieval: {
     defaultMode: "lexical",
     dense: {
@@ -106,6 +109,10 @@ export async function loadConfig(workspacePath: string, configPath?: string): Pr
     rag: {
       ...defaults.rag,
       ...(parsed.rag ?? {})
+    },
+    search: {
+      ...defaults.search,
+      ...(parsed.search ?? {})
     },
     retrieval: {
       ...defaults.retrieval,

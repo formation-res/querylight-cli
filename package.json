@@ -1,6 +1,6 @@
 {
   "name": "@tryformation/querylight-cli",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Querylight CLI for building and querying local knowledge bases.",
   "license": "MIT",
   "homepage": "https://github.com/formation-res/querylight-cli#readme",
@@ -36,7 +36,8 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "check": "npm run lint && npm test",
-    "prepublishOnly": "npm run check && npm run build"
+    "prepublishOnly": "npm run check && npm run build && npm run verify:release-version",
+    "verify:release-version": "node scripts/assert-release-version.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",

@@ -6,6 +6,7 @@ import { runCli } from "../src/cli/run-cli.js";
 import { setDenseEmbedderFactoryForTests } from "../src/vector/dense.js";
 import { setPullModelsForTests } from "../src/vector/service.js";
 import { denseVectorPath, writeDensePullMarker } from "../src/vector/store.js";
+import packageJson from "../package.json" with { type: "json" };
 
 const tempDirs: string[] = [];
 
@@ -35,6 +36,7 @@ describe("cli json output", () => {
     expect(init.exitCode).toBe(0);
     expect(initParsed.ok).toBe(true);
     expect(initParsed.command).toBe("init");
+    expect(initParsed.version).toBe(packageJson.version);
     await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
 
     const add = await runCli([
@@ -110,6 +112,35 @@ describe("cli json output", () => {
     expect(parsed.command).toBe("related");
     expect(parsed.data.sourceDocument.documentId).toBeTruthy();
     expect(Array.isArray(parsed.data.results)).toBe(true);
+  });
+
+  it("uses search.defaultTopK when search runs without --top-k", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\nsearch:\n  defaultTopK: 1\n", "utf8");
+    await runCli([
+      "source",
+      "add",
+      "directory",
+      path.resolve("test-fixtures/docs"),
+      "--workspace",
+      workspace,
+      "--name",
+      "Local Docs",
+      "--tag",
+      "docs"
+    ]);
+    await runCli(["rebuild", "--workspace", workspace]);
+
+    const search = await runCli(["search", "api", "--workspace", workspace, "--json"]);
+    const parsed = JSON.parse(search.stdout);
+
+    expect(search.exitCode).toBe(0);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.data.hits.hits).toHaveLength(1);
   });
 
   it("rebuild auto-builds dense vectors when the model is already available", async () => {

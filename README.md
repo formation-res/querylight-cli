@@ -55,6 +55,8 @@ Publish releases from semantic version tags such as `0.1.1`.
 
 The GitHub Actions publish workflow publishes `@tryformation/querylight-cli` to the public npm registry.
 
+The publish workflow builds the package and verifies that the built CLI JSON envelope reports the same version as `package.json` before it publishes.
+
 Configure npm trusted publishing for this repository before the first release. The publish workflow uses GitHub OIDC and does not use an `NPM_TOKEN` secret.
 
 ### Local Development with `npm link`
@@ -247,6 +249,15 @@ crawler:
 ```
 
 Set `crawl.maxConcurrentRequests` on a website or RSS source when one source needs a different limit.
+
+Control the default number of search results returned when `--top-k` is omitted:
+
+```yaml
+search:
+  defaultTopK: 50
+```
+
+For `qli search --source-type rss` with a time-window filter such as `--since`, `--until`, or `--publication-date-from`, `qli` uses `500` results when `--top-k` is omitted.
 
 ## Supported Sources
 

@@ -193,6 +193,9 @@ export type WorkspaceConfig = {
     maxContextChars: number;
     citationStyle: "markdown";
   };
+  search: {
+    defaultTopK: number;
+  };
   retrieval: {
     defaultMode: RetrievalMode;
     dense: DenseVectorModelConfig;

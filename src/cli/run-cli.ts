@@ -437,6 +437,23 @@ function searchDateRanges(options: Record<string, string | undefined>): Array<{ 
   return entries;
 }
 
+function resolveSearchTopK(
+  optionsTopK: string | undefined,
+  sourceTypes: SourceType[] | undefined,
+  dateRanges: Array<{ field: SearchDateField; from?: string; to?: string }>,
+  defaultTopK: number
+): number {
+  const explicitTopK = parseOptionalPositiveInteger(optionsTopK, "--top-k");
+  if (explicitTopK !== undefined) {
+    return explicitTopK;
+  }
+  const includesRss = (sourceTypes ?? []).includes("rss");
+  if (includesRss && dateRanges.length > 0) {
+    return 500;
+  }
+  return defaultTopK;
+}
+
 async function resolveWorkspace(options: { workspace?: string }): Promise<string> {
   return path.resolve(options.workspace ?? DEFAULT_WORKSPACE);
 }
@@ -867,7 +884,7 @@ Examples:
   program.command("search")
     .description("Search the built index and return ranked matching documents or chunks. Use search-json for raw JSON DSL queries.")
     .argument("[query]", "Text query. Omit it to list the latest matching documents.")
-    .option("--top-k <n>", "Maximum number of results to return.", "12")
+    .option("--top-k <n>", "Maximum number of results to return. Defaults to search.defaultTopK in config.yaml. RSS searches with a time window use 500 when omitted.")
     .option("--source <sourceIds>", "Restrict results to one or more source ids. Use comma-separated values.")
     .option("--source-name <names>", "Restrict results to one or more source names. Use comma-separated values.")
     .option("--source-type <types>", `Restrict results to one or more source types. Use comma-separated values: ${SOURCE_TYPE_LIST.join(", ")}`)
@@ -903,23 +920,28 @@ Examples:
 Notes:
   lexical works without vector models.
   dense, sparse, and hybrid require the relevant index artifacts to exist.
+  When you omit --top-k, qli uses search.defaultTopK from config.yaml. The default workspace value is 50.
+  RSS searches with a time window default to 500 results when you omit --top-k.
   Use search-json when you want the raw Querylight 0.11 JSON DSL and hit format.
   When you omit the query, qli returns the latest matching documents sorted by publication date.`)
     .action(async function command(query: string | undefined, options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const config = await loadConfig(workspace, global.config);
+      const sourceTypes = parseSourceTypes(options.sourceType);
+      const dateRanges = searchDateRanges(options);
       const result = await searchIndex({
         workspacePath: workspace,
         query: query ?? "",
-        topK: Number(options.topK),
+        topK: resolveSearchTopK(options.topK, sourceTypes, dateRanges, config.search.defaultTopK),
         sourceIds: parseCommaSeparatedList(options.source),
         sourceNames: parseCommaSeparatedList(options.sourceName),
-        sourceTypes: parseSourceTypes(options.sourceType),
+        sourceTypes,
         uriPrefixes: parseCommaSeparatedList(options.uriPrefix),
         hasPublicationDate: Boolean(options.hasPublicationDate),
         tags: parseCommaSeparatedList(options.tag),
         metadata: ((options.metadata ?? []) as string[]).map(parseKeyValue).map(([key, value]: [string, string]) => ({ key, value })),
-        dateRanges: searchDateRanges(options),
+        dateRanges,
         retrievalMode: parseRetrievalMode(options.retrieval),
         showChunks: Boolean(options.showChunks)
       });
