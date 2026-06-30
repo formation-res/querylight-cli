@@ -40,13 +40,13 @@
     "verify:release-version": "node scripts/assert-release-version.mjs"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
+    "@huggingface/transformers": "^4.2.0",
     "@tryformation/querylight-ts": "^0.11.0",
     "cheerio": "^1.2.0",
     "cli-table3": "^0.6.5",
-    "commander": "^14.0.3",
+    "commander": "^15.0.0",
     "fast-glob": "^3.3.3",
-    "feedparser": "^2.2.10",
+    "feedparser": "^2.6.0",
     "feedsmith": "^2.9.4",
     "gray-matter": "^4.0.3",
     "mammoth": "^1.12.0",
@@ -56,12 +56,14 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/feedparser": "^2.2.8",
-    "@types/node": "^25.8.0",
+    "@types/node": "^26.0.1",
     "@types/pdf-parse": "^1.1.5",
     "@types/turndown": "^5.0.6",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.9"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
   }
 }

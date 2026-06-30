@@ -68,7 +68,6 @@ async function createSparseQueryEncoder(cacheDir: string, modelId: string, query
   return async (text: string): Promise<SparseVector> => {
     const features = await tokenizer([text], {
       truncation: true,
-      return_attention_mask: false,
       return_token_type_ids: false
     });
     return buildSparseQueryVector(normalizeTokenIds(features.input_ids), queryTokenWeights);

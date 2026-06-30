@@ -121,7 +121,7 @@ export async function runSparsePython(
 }
 
 export async function getDenseTransformersRuntime(cacheDir: string): Promise<{
-  env: { cacheDir: string; allowLocalModels: boolean };
+  env: typeof import("@huggingface/transformers").env;
   pipeline: typeof import("@huggingface/transformers").pipeline;
 }> {
   const transformers = await import("@huggingface/transformers");
