@@ -1,6 +1,6 @@
 {
   "name": "@tryformation/querylight-cli",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Querylight CLI for building and querying local knowledge bases.",
   "license": "MIT",
   "homepage": "https://github.com/formation-res/querylight-cli#readme",
