@@ -6,6 +6,7 @@ import { DEFAULT_WORKSPACE, PACKAGE_VERSION } from "../core/constants.js";
 import { loadConfig } from "../core/config.js";
 import { CliError, ExitCode } from "../core/errors.js";
 import { assertWorkspaceExists, ensureWorkspace } from "../core/workspace.js";
+import { assertWritableWorkspacePath, packageWorkspaceArchive, resolveReadableWorkspace } from "../core/archive.js";
 import { buildIndex } from "../index/querylight-indexer.js";
 import { ingestSources, reprocessDocuments } from "../ingest/ingest-service.js";
 import { discoverWebsiteFeed, type WebsiteFeedDiscovery } from "../ingest/adapters/website-feed-discovery.js";
@@ -454,8 +455,12 @@ function resolveSearchTopK(
   return defaultTopK;
 }
 
-async function resolveWorkspace(options: { workspace?: string }): Promise<string> {
-  return path.resolve(options.workspace ?? DEFAULT_WORKSPACE);
+async function resolveWorkspace(options: { workspace?: string }, mode: { writable?: boolean } = {}): Promise<string> {
+  const workspace = options.workspace ?? DEFAULT_WORKSPACE;
+  if (mode.writable) {
+    return assertWritableWorkspacePath(workspace);
+  }
+  return (await resolveReadableWorkspace(workspace)).workspacePath;
 }
 
 function workspaceFromArgv(argv: string[]): string {
@@ -480,7 +485,7 @@ export async function runCli(
     .name("qli")
     .description("Build and query a local Querylight workspace from files, directories, URLs, websites, and feeds.")
     .showHelpAfterError()
-    .option("--workspace <path>", "Workspace directory. Defaults to .kb in the current directory.", DEFAULT_WORKSPACE)
+    .option("--workspace <path>", "Workspace directory, or a packaged .zip workspace for read-only commands. Defaults to .kb in the current directory.", DEFAULT_WORKSPACE)
     .option("--config <path>", "Optional config file override. Useful for testing alternate retrieval settings.")
     .option("--json", "Return a stable JSON envelope for automation and agents.")
     .option("--silent", "Suppress progress logging for long-running commands.")
@@ -497,12 +502,15 @@ Examples:
   qli init
   qli source add directory ./docs --name "Product Docs" --tag docs
   qli ingest
+  qli package ./docs-kb.zip
   qli rebuild --silent
   qli search "api authentication" --top-k 8
+  qli search --workspace ./docs-kb.zip "api authentication"
   qli context "How do API keys work?" --top-k 8 --max-chars 8000
 
 Long-running commands print progress to stderr by default. Use --silent to suppress it.
 Use --json when another tool needs stable structured output.
+Read-only commands can use --workspace with a packaged .zip workspace.
 
 Use qli <command> --help for command-specific options and examples.`);
 
@@ -521,7 +529,7 @@ Notes:
   Sparse model downloads require uv. If uv is not available, init skips the sparse pull.`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: this.optsWithGlobals().workspace });
+      const workspace = await resolveWorkspace({ workspace: this.optsWithGlobals().workspace }, { writable: true });
       const result = await ensureWorkspace({ workspacePath: workspace, force: Boolean(options.force) });
       const config = await loadConfig(workspace, global.config);
       const status = await getModelStatus(workspace, config);
@@ -581,7 +589,7 @@ Notes:
       }
       validateSourceAddOptions(type, options);
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const config = await loadConfig(workspace, global.config);
       const now = new Date().toISOString();
       const initialCrawl = createSourceCrawlConfig(type, options, { retentionDays: config.crawler.retentionDays });
@@ -677,7 +685,7 @@ Notes:
   URI, source type, and source id do not change here.`)
     .action(async function command(sourceId: string, options: SourceConfigOptions) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const sources = await listSources(workspace);
       const current = sources.find((source) => source.id === sourceId);
       if (!current) {
@@ -714,7 +722,7 @@ Examples:
   qli source list --json`)
     .action(async function command(sourceId: string) {
     const global = this.optsWithGlobals();
-    const workspace = await resolveWorkspace({ workspace: global.workspace });
+    const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
     await removeSource(workspace, sourceId);
     emit(global.json, capture, response("source remove", workspace, { sourceId }), `Removed source ${sourceId}`);
   });
@@ -728,7 +736,7 @@ Examples:
   qli source enable src_123`)
     .action(async function command(sourceId: string) {
     const global = this.optsWithGlobals();
-    const workspace = await resolveWorkspace({ workspace: global.workspace });
+    const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
     const updated = await updateSource(workspace, sourceId, { enabled: false, updatedAt: new Date().toISOString() });
     emit(global.json, capture, response("source disable", workspace, updated), `Disabled source ${sourceId}`);
   });
@@ -742,7 +750,7 @@ Examples:
   qli source list`)
     .action(async function command(sourceId: string) {
     const global = this.optsWithGlobals();
-    const workspace = await resolveWorkspace({ workspace: global.workspace });
+    const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
     const updated = await updateSource(workspace, sourceId, { enabled: true, updatedAt: new Date().toISOString() });
     emit(global.json, capture, response("source enable", workspace, updated), `Enabled source ${sourceId}`);
   });
@@ -762,7 +770,7 @@ Examples:
   qli ingest --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const result = await runIngestCommand({
         workspace,
         sourceId: options.source,
@@ -786,7 +794,7 @@ Examples:
   qli chunk --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const result = await chunkDocuments({
         workspacePath: workspace,
         sourceId: options.source,
@@ -808,7 +816,7 @@ Examples:
   qli reprocess --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const result = await reprocessDocuments({
         workspacePath: workspace,
         sourceId: options.source,
@@ -832,7 +840,7 @@ Examples:
   qli index build --silent`)
     .action(async function command(options) {
     const global = this.optsWithGlobals();
-    const workspace = await resolveWorkspace({ workspace: global.workspace });
+    const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
     const result = await buildIndex({
       workspacePath: workspace,
       denseOverride: options.dense ? true : undefined,
@@ -857,7 +865,7 @@ Examples:
   qli rebuild --silent`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const progress = createProgressHandler(capture, global);
       progress?.("info", "Rebuild step 1/3: ingest");
       const ingest = await ingestSources({
@@ -879,6 +887,31 @@ Examples:
       const data = { ingest, chunk, indexPath: indexBuild.indexPath, metadata: indexBuild.metadata };
       progress?.("info", "Rebuild complete");
       emit(global.json, capture, response("rebuild", workspace, data), `Processed ${ingest.processedSources} sources, wrote ${chunk.chunksWritten} chunks`);
+    });
+
+  program.command("package")
+    .description("Write the current workspace to a zip archive that read-only commands can use directly.")
+    .argument("<archive>", "Output .zip file.")
+    .option("--force", "Replace the output archive if it already exists.")
+    .addHelpText("after", `
+Examples:
+  qli package ./docs-kb.zip
+  qli package ./deploy/docs-kb.zip --workspace ./docs/.kb
+  qli package ./docs-kb.zip --force --json
+
+Notes:
+  The archive stores the workspace contents at the zip root.
+  Use the zip with read-only commands such as search, search-json, related, context, status, doctor, and serve.
+  Rebuild the directory workspace and package it again when source content changes.`)
+    .action(async function command(archive: string, options) {
+      const global = this.optsWithGlobals();
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
+      const result = await packageWorkspaceArchive({
+        workspacePath: workspace,
+        outputPath: archive,
+        force: Boolean(options.force)
+      });
+      emit(global.json, capture, response("package", workspace, result), `Packaged ${result.fileCount} files to ${result.archivePath}`);
     });
 
   program.command("search")
@@ -915,6 +948,7 @@ Examples:
   qli search --source-name "Release Feed,Company Blog" --uri-prefix https://example.com/news,https://example.com/blog
   qli search "billing" --metadata team=support
   qli search "embedding model" --retrieval hybrid --show-chunks
+  qli search --workspace ./docs-kb.zip "authentication"
   qli search --source-type rss,page --top-k 25 --json
 
 Notes:
@@ -980,6 +1014,7 @@ Notes:
 Examples:
   qli serve
   qli serve --workspace ./docs/.kb --port 4000
+  qli serve --workspace ./docs-kb.zip --port 4000
   qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
 
 Routes:
@@ -990,11 +1025,11 @@ Routes:
 Notes:
   The request body must be a Querylight JSON DSL object.
   serve only exposes lexical _search for now.
-  When --workspace points to a directory of knowledge bases, each child directory must contain its own .kb workspace.
+  When --workspace points to a directory of knowledge bases, qli serves child .zip files and child directories that contain .kb.
   Index files are loaded once at startup and reused across requests.`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = path.resolve(global.workspace ?? DEFAULT_WORKSPACE);
       const port = Number(options.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new CliError(`invalid port: ${options.port}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
@@ -1088,7 +1123,7 @@ Use --json when another tool needs structured access to the raw passages and met
   const models = program.command("models");
   models.description("Inspect and download retrieval model assets.");
   models.command("pull")
-    .description("Download dense and or sparse retrieval assets required by vector search.")
+    .description("Download dense or sparse retrieval assets required by vector search.")
     .option("--dense", "Only pull dense retrieval assets.")
     .option("--sparse", "Only pull sparse retrieval assets.")
     .addHelpText("after", `
@@ -1102,7 +1137,7 @@ Pulled model assets are shared under ~/.qli by default.
 If you plan to use related, dense search, or hybrid retrieval, pull the models and rebuild the index first.`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
-      const workspace = await resolveWorkspace({ workspace: global.workspace });
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const config = await loadConfig(workspace, global.config);
       const status = await getModelStatus(workspace, config);
       const { pullDense, pullSparse } = resolveModelPullPlan({

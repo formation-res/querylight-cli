@@ -15,6 +15,7 @@ It is designed for local, inspectable workflows:
 - normalize content into Markdown-like text
 - chunk documents for retrieval
 - build a portable local Querylight index
+- package a workspace as a zip for deployment
 - search and generate retrieval context for external agents and tools
 - serve an OpenSearch-like `_search` API over one or more local knowledge bases
 - inspect workspace state, diffs, and change reports
@@ -105,10 +106,17 @@ Build the knowledge base:
 qli ingest
 ```
 
+Package it for deployment:
+
+```bash
+qli package ./docs-kb.zip
+```
+
 Search it:
 
 ```bash
 qli search "API authentication"
+qli search --workspace ./docs-kb.zip "API authentication"
 qli search --source-type rss --since 2026-05-01 --has-publication-date
 qli search-json '{"query":{"match":{"text":"API authentication"}},"size":5}'
 curl -X POST http://127.0.0.1:3000/_search \
@@ -136,7 +144,7 @@ qli serve
 
 `qli serve` loads the current workspace index once at startup and reuses it for each request.
 Use `POST /_search` or `POST /<configured-index-name>/_search` for a single workspace.
-Use `POST /<directory-name>/_search` when `--workspace` points to a directory whose children each contain their own `.kb` workspace.
+Use `POST /<directory-name>/_search` when `--workspace` points to a directory whose children are packaged `.zip` workspaces or directories that contain `.kb`.
 
 ## Example Skill: `qli` with `bunx` and `uv`
 
@@ -241,6 +249,22 @@ Use a custom workspace with:
 qli --workspace ./my-kb <command>
 ```
 
+Package a built workspace with:
+
+```bash
+qli package ./docs-kb.zip --workspace ./my-kb
+```
+
+Read-only commands can use the zip directly:
+
+```bash
+qli search --workspace ./docs-kb.zip "authentication"
+qli context --workspace ./docs-kb.zip "How does auth work?"
+qli serve --workspace ./docs-kb.zip
+```
+
+Zip workspaces are read-only. Rebuild the directory workspace and package it again when source content changes.
+
 Control the default remote concurrency in `config.yaml`:
 
 ```yaml
@@ -292,6 +316,8 @@ All commands support:
 --verbose
 ```
 
+`--workspace` accepts a directory workspace. Read-only commands also accept a packaged `.zip` workspace.
+
 Long-running commands print progress to stderr by default. Use `--silent` to suppress progress output. Use `--json` when another tool needs stable structured output.
 
 ### Initialize
@@ -301,6 +327,16 @@ qli init
 qli init --workspace ./kb
 qli init --force
 ```
+
+### Package
+
+```bash
+qli package ./docs-kb.zip
+qli package ./deploy/docs-kb.zip --workspace ./docs/.kb
+qli package ./docs-kb.zip --force --json
+```
+
+The archive stores workspace contents at the zip root. Use the zip with `search`, `search-json`, `related`, `context`, `status`, `doctor`, and `serve`.
 
 ### Manage Sources
 
@@ -404,11 +440,12 @@ Serve the lexical index over HTTP:
 ```bash
 qli serve
 qli serve --workspace ./docs/.kb --port 4000
+qli serve --workspace ./docs-kb.zip --port 4000
 qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
 ```
 
 For a single workspace, use `POST /_search` or `POST /<configured-index-name>/_search`.
-For a directory of knowledge bases, use `POST /<directory-name>/_search`.
+For a directory of knowledge bases, use `POST /<directory-name>/_search`. Child `.zip` files use the file stem as the route name.
 The request body must be a Querylight JSON DSL object.
 
 ### Change Inspection

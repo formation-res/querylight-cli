@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -64,6 +64,44 @@ describe("cli json output", () => {
     const searchParsed = JSON.parse(search.stdout);
     expect(searchParsed.ok).toBe(true);
     expect(searchParsed.data.hits.hits[0]._source.title).toContain("API Authentication");
+  });
+
+  it("packages a workspace and searches the zip directly", async () => {
+    const root = await tempWorkspace();
+    const workspace = path.join(root, ".kb");
+    const archive = path.join(root, "docs-kb.zip");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+
+    await runCli(["init", "--workspace", workspace]);
+    await writeFile(path.join(workspace, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
+    await runCli([
+      "source",
+      "add",
+      "directory",
+      path.resolve("test-fixtures/docs"),
+      "--workspace",
+      workspace,
+      "--name",
+      "Local Docs"
+    ]);
+    await runCli(["ingest", "--workspace", workspace]);
+
+    const packaged = await runCli(["package", archive, "--workspace", workspace, "--json"]);
+    const packagedParsed = JSON.parse(packaged.stdout);
+    expect(packaged.exitCode).toBe(0);
+    expect(packagedParsed.data.archivePath).toBe(archive);
+    await expect(stat(archive)).resolves.toBeDefined();
+
+    const search = await runCli(["search", "authentication", "--workspace", archive, "--json"]);
+    const searchParsed = JSON.parse(search.stdout);
+    expect(search.exitCode).toBe(0);
+    expect(searchParsed.data.hits.hits[0]._source.title).toContain("API Authentication");
+
+    const rebuild = await runCli(["rebuild", "--workspace", archive, "--json"]);
+    const error = JSON.parse(rebuild.stderr);
+    expect(rebuild.exitCode).toBe(3);
+    expect(error.error.code).toBe("WORKSPACE_ERROR");
+    expect(error.error.message).toContain("zip workspaces are read-only");
   });
 
   it("returns related documents from the CLI", async () => {

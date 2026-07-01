@@ -2,6 +2,7 @@ import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../src/cli/run-cli.js";
+import { packageWorkspaceArchive } from "../src/core/archive.js";
 import { startSearchApiServer } from "../src/server/search-api.js";
 import { cleanupTempDirs, tempWorkspace } from "./helpers.js";
 
@@ -34,6 +35,36 @@ describe("search api server", () => {
     const root = await tempWorkspace("qli-serve-");
     const workspace = await buildWorkspace(root, "Local Docs");
     const server = await startSearchApiServer({ workspacePath: workspace, host: "127.0.0.1", port: 0 });
+
+    try {
+      const response = await fetch(`${server.url}/_search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          query: {
+            match: {
+              text: "authentication"
+            }
+          },
+          size: 5
+        })
+      });
+      const parsed = await response.json() as { hits: { hits: Array<{ _index: string; _source: { title: string } }> } };
+
+      expect(response.status).toBe(200);
+      expect(parsed.hits.hits[0]?._source.title).toContain("API Authentication");
+      expect(parsed.hits.hits[0]?._index).toBe("default");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves _search for a packaged workspace zip", async () => {
+    const root = await tempWorkspace("qli-serve-zip-");
+    const workspace = await buildWorkspace(root, "Local Docs");
+    const archive = path.join(root, "docs-kb.zip");
+    await packageWorkspaceArchive({ workspacePath: workspace, outputPath: archive });
+    const server = await startSearchApiServer({ workspacePath: archive, host: "127.0.0.1", port: 0 });
 
     try {
       const response = await fetch(`${server.url}/_search`, {
@@ -93,6 +124,41 @@ describe("search api server", () => {
           },
           size: 3
         })
+      });
+      const alphaParsed = await alphaResponse.json() as { hits: { hits: Array<{ _index: string }> } };
+      const betaParsed = await betaResponse.json() as { hits: { hits: Array<{ _index: string }> } };
+
+      expect(alphaResponse.status).toBe(200);
+      expect(betaResponse.status).toBe(200);
+      expect(alphaParsed.hits.hits[0]?._index).toBe("alpha");
+      expect(betaParsed.hits.hits[0]?._index).toBe("beta");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves multiple packaged knowledge bases from a parent directory", async () => {
+    const root = await tempWorkspace("qli-serve-multi-zip-");
+    const alphaRoot = path.join(root, "alpha-src");
+    const betaRoot = path.join(root, "beta-src");
+    const alphaWorkspace = await buildWorkspace(alphaRoot, "Alpha Docs");
+    const betaWorkspace = await buildWorkspace(betaRoot, "Beta Docs");
+    await packageWorkspaceArchive({ workspacePath: alphaWorkspace, outputPath: path.join(root, "alpha.zip") });
+    await packageWorkspaceArchive({ workspacePath: betaWorkspace, outputPath: path.join(root, "beta.zip") });
+    await rm(alphaRoot, { recursive: true, force: true });
+    await rm(betaRoot, { recursive: true, force: true });
+    const server = await startSearchApiServer({ workspacePath: root, host: "127.0.0.1", port: 0 });
+
+    try {
+      const alphaResponse = await fetch(`${server.url}/alpha/_search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: { match: { text: "authentication" } }, size: 3 })
+      });
+      const betaResponse = await fetch(`${server.url}/beta/_search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: { match: { text: "authentication" } }, size: 3 })
       });
       const alphaParsed = await alphaResponse.json() as { hits: { hits: Array<{ _index: string }> } };
       const betaParsed = await betaResponse.json() as { hits: { hits: Array<{ _index: string }> } };

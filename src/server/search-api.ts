@@ -3,6 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "../core/config.js";
 import { assertWorkspaceExists } from "../core/workspace.js";
+import { isWorkspaceArchivePath, resolveReadableWorkspace } from "../core/archive.js";
 import { CliError, ExitCode } from "../core/errors.js";
 import { loadHydratedIndex, searchJsonRequest } from "../query/search-service.js";
 import type { DocumentIndex, JsonDslRequest, JsonDslResponse } from "@tryformation/querylight-ts";
@@ -35,7 +36,7 @@ async function pathIsDirectory(candidatePath: string): Promise<boolean> {
 
 async function discoverKnowledgeBases(workspacePath: string): Promise<{ mode: "single" | "multi"; knowledgeBases: ServedKnowledgeBase[] }> {
   try {
-    const singleWorkspace = await assertWorkspaceExists(workspacePath);
+    const singleWorkspace = (await resolveReadableWorkspace(workspacePath)).workspacePath;
     const config = await loadConfig(singleWorkspace);
     const index = await loadHydratedIndex(singleWorkspace);
     return {
@@ -60,15 +61,20 @@ async function discoverKnowledgeBases(workspacePath: string): Promise<{ mode: "s
 
   const entries = await readdir(resolvedRoot, { withFileTypes: true });
   const knowledgeBases = (await Promise.all(entries
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() || (entry.isFile() && isWorkspaceArchivePath(entry.name)))
     .map(async (entry) => {
-      const candidateWorkspace = path.join(resolvedRoot, entry.name, ".kb");
+      const candidateWorkspace = entry.isDirectory()
+        ? path.join(resolvedRoot, entry.name, ".kb")
+        : path.join(resolvedRoot, entry.name);
+      const knowledgeBaseName = entry.isDirectory() ? entry.name : entry.name.replace(/\.zip$/i, "");
       try {
-        const workspace = await assertWorkspaceExists(candidateWorkspace);
+        const workspace = entry.isDirectory()
+          ? await assertWorkspaceExists(candidateWorkspace)
+          : (await resolveReadableWorkspace(candidateWorkspace)).workspacePath;
         const config = await loadConfig(workspace);
         const index = await loadHydratedIndex(workspace);
         return {
-          name: entry.name,
+          name: knowledgeBaseName,
           workspacePath: workspace,
           configuredIndexName: config.index.name,
           index
@@ -84,7 +90,7 @@ async function discoverKnowledgeBases(workspacePath: string): Promise<{ mode: "s
 
   if (knowledgeBases.length === 0) {
     throw new CliError(
-      `no knowledge bases found at ${resolvedRoot}; use a .kb workspace or a directory of named subdirectories that each contain .kb`,
+      `no knowledge bases found at ${resolvedRoot}; use a .kb workspace, a .zip workspace, or a directory of .zip files or named subdirectories that each contain .kb`,
       "WORKSPACE_ERROR",
       ExitCode.WorkspaceError
     );
