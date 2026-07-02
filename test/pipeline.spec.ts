@@ -153,6 +153,7 @@ describe("pipeline behavior", () => {
   it("supports source, uri, and date filters and lists latest documents when query is omitted", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     const rssSource = await addSource(workspacePath, {
       type: "rss",
       uri: "https://example.com/feed.xml",
@@ -301,6 +302,7 @@ describe("pipeline behavior", () => {
   it("creates bounded context blocks with chunk citations", async () => {
     const root = await tempWorkspace();
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeFile(path.join(workspacePath, "config.yaml"), "retrieval:\n  dense:\n    enabled: false\n  sparse:\n    enabled: false\n", "utf8");
     await addSource(workspacePath, {
       type: "directory",
       uri: docsDir,
