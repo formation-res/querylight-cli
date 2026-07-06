@@ -1,7 +1,7 @@
 import { VectorFieldIndex, cosineSimilarity, createSeededRandom, type VectorFieldIndexState } from "@tryformation/querylight-ts";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { sha256 } from "../core/hashing.js";
+import { hashJson } from "../core/gzip-json.js";
 import { readJsonl } from "../core/jsonl.js";
 import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
 import type { ChunkRecord, DenseVectorMetadata, DenseVectorPayload, DenseVectorRecord, RetrievalMode, WorkspaceConfig } from "../types/models.js";
@@ -119,7 +119,7 @@ export async function buildDenseVectors(
       hashTables: config.indexHashTables,
       randomSeed: config.indexRandomSeed,
       chunkCount: records.length,
-      indexHash: sha256(JSON.stringify(index.indexState))
+      indexHash: await hashJson(index.indexState)
     };
     const payload: DenseVectorPayload = {
       metadata,

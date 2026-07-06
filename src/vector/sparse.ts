@@ -1,7 +1,7 @@
 import { SparseVectorFieldIndex, type SparseVector, type SparseVectorFieldIndexState } from "@tryformation/querylight-ts";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { sha256 } from "../core/hashing.js";
+import { hashJson } from "../core/gzip-json.js";
 import { readJsonl } from "../core/jsonl.js";
 import { reportProgress, type ProgressHandler } from "../core/progress.js";
 import type { ChunkRecord, SparseVectorMetadata, SparseVectorPayload, SparseVectorRecord, WorkspaceConfig } from "../types/models.js";
@@ -160,7 +160,7 @@ export async function buildSparseVectors(
     queryEncoding: config.queryEncoding,
     documentEncoding: config.documentEncoding,
     chunkCount: built.chunks.length,
-    indexHash: sha256(JSON.stringify(index.indexState))
+    indexHash: await hashJson(index.indexState)
   };
   const payload: SparseVectorPayload = {
     metadata,

@@ -1,6 +1,6 @@
 {
   "name": "@tryformation/querylight-cli",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "Querylight CLI for building and querying local knowledge bases.",
   "license": "MIT",
   "homepage": "https://github.com/formation-res/querylight-cli#readme",
@@ -53,13 +53,16 @@
     "mammoth": "^1.12.0",
     "pdf-parse": "^2.4.5",
     "picocolors": "^1.1.1",
+    "stream-json": "^3.4.0",
     "turndown": "^7.2.4",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
     "@types/pdf-parse": "^1.1.5",
     "@types/turndown": "^5.0.6",
+    "@types/yauzl": "^3.4.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"

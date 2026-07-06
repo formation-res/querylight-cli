@@ -82,6 +82,8 @@ describe("search api server", () => {
       const parsed = await response.json() as { hits: { hits: Array<{ _index: string; _source: { title: string } }> } };
 
       expect(response.status).toBe(200);
+      expect(server.knowledgeBases[0]?.storage).toBe("archive");
+      expect(server.knowledgeBases[0]?.workspacePath).toBe(archive);
       expect(parsed.hits.hits[0]?._source.title).toContain("API Authentication");
       expect(parsed.hits.hits[0]?._index).toBe("default");
     } finally {
@@ -137,6 +139,36 @@ describe("search api server", () => {
     }
   });
 
+  it("lists available knowledge base prefixes", async () => {
+    const root = await tempWorkspace("qli-serve-list-");
+    const alphaRoot = path.join(root, "alpha-src");
+    const betaRoot = path.join(root, "beta-src");
+    const alphaWorkspace = await buildWorkspace(alphaRoot, "Alpha Docs");
+    const betaWorkspace = await buildWorkspace(betaRoot, "Beta Docs");
+    await packageWorkspaceArchive({ workspacePath: alphaWorkspace, outputPath: path.join(root, "alpha.zip") });
+    await packageWorkspaceArchive({ workspacePath: betaWorkspace, outputPath: path.join(root, "beta.zip") });
+    await rm(alphaRoot, { recursive: true, force: true });
+    await rm(betaRoot, { recursive: true, force: true });
+    const server = await startSearchApiServer({ workspacePath: root, host: "127.0.0.1", port: 0 });
+
+    try {
+      const response = await fetch(`${server.url}/_knowledge_bases`);
+      const parsed = await response.json() as {
+        mode: string;
+        prefixes: string[];
+        knowledgeBases: Array<{ name: string; prefix: string; route: string; storage: string }>;
+      };
+
+      expect(response.status).toBe(200);
+      expect(parsed.mode).toBe("multi");
+      expect(parsed.prefixes.sort()).toEqual(["/alpha", "/beta"]);
+      expect(parsed.knowledgeBases.map((knowledgeBase) => knowledgeBase.route).sort()).toEqual(["/alpha/_search", "/beta/_search"]);
+      expect(parsed.knowledgeBases.every((knowledgeBase) => knowledgeBase.storage === "archive")).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves multiple packaged knowledge bases from a parent directory", async () => {
     const root = await tempWorkspace("qli-serve-multi-zip-");
     const alphaRoot = path.join(root, "alpha-src");
@@ -171,4 +203,5 @@ describe("search api server", () => {
       await server.close();
     }
   });
+
 });

@@ -20,7 +20,7 @@ import type { CommandResponse, CrawlConfig, Metadata, RetrievalMode, Source, Sou
 import { formatRelatedDocuments, formatSearchResults, formatSourcesTable } from "./format.js";
 import { listRuns } from "../core/runs.js";
 import { readJsonl } from "../core/jsonl.js";
-import { readLatestIndexMetadata, resolveLatestIndexArtifactPath } from "../index/index-store.js";
+import { artifactSizeBytes, readLatestIndexMetadata, resolveLatestIndexArtifactPath } from "../index/index-store.js";
 import { getModelStatus, pullModels, resolveMissingConfiguredModelPullPlan, resolveModelPullPlan } from "../vector/service.js";
 import { ensureUvAvailable, isUvAvailable, resolveCacheDir } from "../vector/runtime.js";
 import type { ProgressHandler, ProgressLevel } from "../core/progress.js";
@@ -1018,6 +1018,7 @@ Examples:
   qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
 
 Routes:
+  List mounted knowledge bases: GET /_knowledge_bases
   Single workspace: POST /_search
   Single workspace: POST /<configured-index-name>/_search
   Multi-KB root: POST /<directory-name>/_search
@@ -1026,7 +1027,8 @@ Notes:
   The request body must be a Querylight JSON DSL object.
   serve only exposes lexical _search for now.
   When --workspace points to a directory of knowledge bases, qli serves child .zip files and child directories that contain .kb.
-  Index files are loaded once at startup and reused across requests.`)
+  Zip knowledge bases are mounted read-only from the archive and are not extracted to a workspace directory.
+  Index files are loaded once per knowledge base and reused across requests.`)
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = path.resolve(global.workspace ?? DEFAULT_WORKSPACE);
@@ -1238,7 +1240,7 @@ Examples:
     try {
       const meta = await readLatestIndexMetadata(workspace);
       latestIndex = meta.createdAt;
-      indexSize = (await stat(await resolveLatestIndexArtifactPath(workspace))).size;
+      indexSize = await artifactSizeBytes(await resolveLatestIndexArtifactPath(workspace));
     } catch {
       latestIndex = undefined;
     }

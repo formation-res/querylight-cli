@@ -142,9 +142,11 @@ Serve the lexical index over HTTP:
 qli serve
 ```
 
-`qli serve` loads the current workspace index once at startup and reuses it for each request.
+`qli serve` loads each knowledge base index once and reuses it for later requests.
+Use `GET /_knowledge_bases` to list the mounted knowledge base prefixes.
 Use `POST /_search` or `POST /<configured-index-name>/_search` for a single workspace.
 Use `POST /<directory-name>/_search` when `--workspace` points to a directory whose children are packaged `.zip` workspaces or directories that contain `.kb`.
+Packaged `.zip` knowledge bases are mounted read-only from the archive. `qli serve` does not extract them to workspace directories.
 
 ## Example Skill: `qli` with `bunx` and `uv`
 
@@ -446,7 +448,10 @@ qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
 
 For a single workspace, use `POST /_search` or `POST /<configured-index-name>/_search`.
 For a directory of knowledge bases, use `POST /<directory-name>/_search`. Child `.zip` files use the file stem as the route name.
+Use `GET /_knowledge_bases` to list the available prefixes before querying.
 The request body must be a Querylight JSON DSL object.
+Packaged `.zip` knowledge bases are mounted read-only from the archive. `qli serve` does not extract them to workspace directories.
+Index files are loaded once per knowledge base and reused across requests.
 
 ### Change Inspection
 

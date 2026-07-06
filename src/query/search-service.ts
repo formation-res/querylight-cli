@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { BoolQuery, MatchQuery, OP, reciprocalRankFusion, searchJsonDsl, type DocumentIndex, type JsonDslRequest, type JsonDslResponse } from "@tryformation/querylight-ts";
+import { BoolQuery, DocumentIndex, MatchQuery, OP, reciprocalRankFusion, searchJsonDsl, type JsonDslRequest, type JsonDslResponse } from "@tryformation/querylight-ts";
 import path from "node:path";
 import { buildChunksForDocument } from "../chunk/chunker.js";
 import { loadConfig } from "../core/config.js";
@@ -24,8 +24,12 @@ export async function loadHydratedIndex(workspacePath: string): Promise<Document
     }
     throw error;
   }
+  return hydrateIndexState(state);
+}
+
+export function hydrateIndexState(state: object): DocumentIndex {
   const mapping = createIndexMapping(Object.keys(((state as { fieldState?: Record<string, unknown> }).fieldState ?? {})).filter((field) => field.startsWith("metadata.")));
-  return new (await import("@tryformation/querylight-ts")).DocumentIndex(mapping).loadState(state as never);
+  return new DocumentIndex(mapping).loadState(state as never);
 }
 
 type SearchDateField = "publicationDate" | "firstSeenAt" | "lastSeenAt" | "lastChangedAt" | "crawledAt";

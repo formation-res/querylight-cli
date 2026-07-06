@@ -121,6 +121,7 @@ export async function buildIndex(
   reportProgressDetail(progress, `Indexed ${documents.length} document${documents.length === 1 ? "" : "s"} across ${sources.length} source${sources.length === 1 ? "" : "s"}`);
 
   const createdAt = new Date().toISOString();
+  const fields = Object.keys(index.mapping);
   const metadata: IndexMetadata = {
     id: `index_${createdAt.replace(/[:.]/g, "-")}`,
     createdAt,
@@ -129,8 +130,11 @@ export async function buildIndex(
     documentCount: documents.length,
     chunkCount: chunks.length,
     sourceCount: sources.length,
-    fields: Object.keys(index.mapping),
-    indexHash: sha256(JSON.stringify(index.indexState))
+    fields,
+    indexHash: sha256(JSON.stringify({
+      fields,
+      chunks: chunks.map((chunk) => [chunk.id, chunk.contentHash])
+    }))
   };
   reportProgress(progress, "Writing lexical index artifacts");
   const artifacts = await writeIndexArtifacts({ workspacePath, indexState: index.indexState, metadata });

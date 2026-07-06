@@ -86,9 +86,7 @@ export async function writeDefaultConfig(workspacePath: string, force = false): 
   await writeFile(configPath, YAML.stringify(defaultConfig()), "utf8");
 }
 
-export async function loadConfig(workspacePath: string, configPath?: string): Promise<WorkspaceConfig> {
-  const resolved = configPath ?? path.join(workspacePath, "config.yaml");
-  const raw = await readFile(resolved, "utf8");
+export function parseWorkspaceConfig(raw: string): WorkspaceConfig {
   const parsed = YAML.parse(raw) as Partial<WorkspaceConfig>;
   const defaults = defaultConfig();
   return {
@@ -137,4 +135,9 @@ export async function loadConfig(workspacePath: string, configPath?: string): Pr
       ...(parsed.limits ?? {})
     }
   };
+}
+
+export async function loadConfig(workspacePath: string, configPath?: string): Promise<WorkspaceConfig> {
+  const resolved = configPath ?? path.join(workspacePath, "config.yaml");
+  return parseWorkspaceConfig(await readFile(resolved, "utf8"));
 }
