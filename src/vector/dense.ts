@@ -169,3 +169,23 @@ export async function denseQuery(
     await embedder.dispose?.();
   }
 }
+
+export async function inferDenseVector(
+  {
+    workspacePath,
+    config,
+    text
+  }: {
+    workspacePath: string;
+    config: WorkspaceConfig["retrieval"]["dense"];
+    text: string;
+  }
+): Promise<number[]> {
+  const cacheDir = resolveCacheDir(workspacePath, config.cacheDir);
+  const embedder = await createEmbedder(cacheDir, config.modelId);
+  try {
+    return await embedder.embed(text);
+  } finally {
+    await embedder.dispose?.();
+  }
+}

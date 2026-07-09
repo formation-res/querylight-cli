@@ -1021,14 +1021,22 @@ Examples:
   qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
 
 Routes:
+  API help: GET /_help
   List mounted knowledge bases: GET /_knowledge_bases
+  Build query vectors: POST /_infer
   Single workspace: POST /_search
   Single workspace: POST /<configured-index-name>/_search
+  Single workspace: POST /<configured-index-name>/_infer
   Multi-KB root: POST /<directory-name>/_search
+  Multi-KB root: POST /<directory-name>/_infer
 
 Notes:
   The request body must be a Querylight JSON DSL object.
-  serve only exposes lexical _search for now.
+  _search follows the JSON DSL. Do not use non-standard retrieval or retrievalMode flags.
+  Use _infer to produce dense and sparse query vectors from text.
+  Use knn with field "embedding" for dense vector search.
+  Use sparse_vector or neural_sparse with field "sparse" for sparse vector search.
+  Use query.rrf.queries to combine lexical, dense, and sparse clauses.
   When --workspace points to a directory of knowledge bases, qli serves child .zip files and child directories that contain .kb.
   Zip knowledge bases are mounted read-only from the archive and are not extracted to a workspace directory.
   Index files are loaded once per knowledge base and reused across requests.`)

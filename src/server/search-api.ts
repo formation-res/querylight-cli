@@ -6,21 +6,44 @@ import path from "node:path";
 import { unzipSync } from "fflate";
 import streamValues from "stream-json/streamers/stream-values.js";
 import * as yauzl from "yauzl";
+import {
+  SparseVectorFieldIndex,
+  VectorFieldIndex,
+  createSeededRandom,
+  type SparseVectorFieldIndexState,
+  type VectorFieldIndexState
+} from "@tryformation/querylight-ts";
 import { loadConfig, parseWorkspaceConfig } from "../core/config.js";
 import { assertWorkspaceExists } from "../core/workspace.js";
 import { isWorkspaceArchivePath, resolveReadableWorkspace } from "../core/archive.js";
 import { CliError, ExitCode } from "../core/errors.js";
+import { fileExists } from "../core/files.js";
 import { hydrateIndexState, loadHydratedIndex, searchJsonRequest } from "../query/search-service.js";
 import type { DocumentIndex, JsonDslRequest, JsonDslResponse } from "@tryformation/querylight-ts";
+import { inferDenseVector } from "../vector/dense.js";
+import { inferSparseVector } from "../vector/sparse.js";
+import { denseVectorPath, readDensePayload, readSparsePayload, sparseVectorPath } from "../vector/store.js";
+import type { WorkspaceConfig } from "../types/models.js";
 
 type ServedKnowledgeBase = {
   name: string;
   workspacePath: string;
+  readableWorkspacePath: string;
+  config: WorkspaceConfig;
   configuredIndexName: string;
   index?: DocumentIndex;
   indexLoad?: Promise<DocumentIndex>;
   loadIndex: () => Promise<DocumentIndex>;
   storage: "directory" | "archive";
+};
+
+type InferenceMode = "dense" | "sparse";
+
+type InferenceRequest = {
+  text?: string;
+  input?: string;
+  mode?: InferenceMode | "both";
+  modes?: InferenceMode[];
 };
 
 export type SearchApiServerInfo = {
@@ -32,6 +55,7 @@ export type SearchApiServerInfo = {
     configuredIndexName: string;
     prefix: string;
     route: string;
+    inferenceRoute: string;
     storage: "directory" | "archive";
   }>;
   close: () => Promise<void>;
@@ -231,12 +255,30 @@ async function getCachedIndex(knowledgeBase: ServedKnowledgeBase): Promise<Docum
   return knowledgeBase.indexLoad;
 }
 
+async function loadSearchIndex(workspacePath: string): Promise<DocumentIndex> {
+  const index = await loadHydratedIndex(workspacePath);
+  if (await fileExists(denseVectorPath(workspacePath))) {
+    const dense = await readDensePayload(workspacePath);
+    index.mapping.embedding = new VectorFieldIndex({
+      numHashTables: dense.metadata.hashTables,
+      dimensions: dense.metadata.dimensions,
+      random: createSeededRandom(dense.metadata.randomSeed)
+    }).loadState(dense.indexState as unknown as VectorFieldIndexState);
+  }
+  if (await fileExists(sparseVectorPath(workspacePath))) {
+    const sparse = await readSparsePayload(workspacePath);
+    index.mapping.sparse = new SparseVectorFieldIndex().loadState(sparse.indexState as unknown as SparseVectorFieldIndexState);
+  }
+  return index;
+}
+
 async function loadArchivedKnowledgeBase(archivePath: string, name: string): Promise<ServedKnowledgeBase> {
   const { workspacePath } = await resolveReadableWorkspace(archivePath);
   const knowledgeBase = await loadDirectoryKnowledgeBase(workspacePath, name);
   return {
     ...knowledgeBase,
     workspacePath: archivePath,
+    readableWorkspacePath: workspacePath,
     storage: "archive"
   };
 }
@@ -244,10 +286,12 @@ async function loadArchivedKnowledgeBase(archivePath: string, name: string): Pro
 async function loadDirectoryKnowledgeBase(workspacePath: string, name?: string): Promise<ServedKnowledgeBase> {
   const workspace = await assertWorkspaceExists(workspacePath);
   const config = await loadConfig(workspace);
-  const index = await loadHydratedIndex(workspace);
+  const index = await loadSearchIndex(workspace);
   return {
     name: name ?? config.index.name,
     workspacePath: workspace,
+    readableWorkspacePath: workspace,
+    config,
     configuredIndexName: config.index.name,
     index,
     loadIndex: async () => index,
@@ -353,8 +397,45 @@ function parseSearchRequest(raw: string): JsonDslRequest {
   }
 }
 
+function parseInferenceRequest(raw: string): InferenceRequest {
+  const normalized = raw.trim();
+  if (normalized.length === 0) {
+    throw new CliError("inference request body is required", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("expected a JSON object");
+    }
+    return parsed as InferenceRequest;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError(`invalid JSON request: ${message}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+}
+
+function requestedInferenceModes(request: InferenceRequest): InferenceMode[] {
+  if (request.modes !== undefined) {
+    if (!Array.isArray(request.modes) || request.modes.some((mode) => mode !== "dense" && mode !== "sparse")) {
+      throw new CliError("modes must be an array containing dense and/or sparse", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+    }
+    return [...new Set(request.modes)];
+  }
+  if (request.mode === undefined || request.mode === "both") {
+    return ["dense", "sparse"];
+  }
+  if (request.mode !== "dense" && request.mode !== "sparse") {
+    throw new CliError("mode must be dense, sparse, or both", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return [request.mode];
+}
+
 function routeForKnowledgeBase(mode: "single" | "multi", knowledgeBase: ServedKnowledgeBase): string {
   return mode === "single" ? "/_search" : `/${knowledgeBase.name}/_search`;
+}
+
+function inferenceRouteForKnowledgeBase(mode: "single" | "multi", knowledgeBase: ServedKnowledgeBase): string {
+  return mode === "single" ? "/_infer" : `/${knowledgeBase.name}/_infer`;
 }
 
 function prefixForKnowledgeBase(mode: "single" | "multi", knowledgeBase: ServedKnowledgeBase): string {
@@ -368,6 +449,7 @@ function publicKnowledgeBases(mode: "single" | "multi", knowledgeBases: ServedKn
     configuredIndexName: knowledgeBase.configuredIndexName,
     prefix: prefixForKnowledgeBase(mode, knowledgeBase),
     route: routeForKnowledgeBase(mode, knowledgeBase),
+    inferenceRoute: inferenceRouteForKnowledgeBase(mode, knowledgeBase),
     storage: knowledgeBase.storage
   }));
 }
@@ -383,6 +465,306 @@ function handleKnowledgeBaseList(
     prefixes: listed.map((knowledgeBase) => knowledgeBase.prefix),
     knowledgeBases: listed
   });
+}
+
+function buildHelpPayload(
+  mode: "single" | "multi",
+  knowledgeBases: ServedKnowledgeBase[],
+  selectedKnowledgeBase?: ServedKnowledgeBase
+): Record<string, unknown> {
+  const listed = publicKnowledgeBases(mode, knowledgeBases);
+  const selected = selectedKnowledgeBase
+    ? publicKnowledgeBases(mode, [selectedKnowledgeBase])[0]
+    : undefined;
+  const searchRoutes = selected
+    ? [selected.route]
+    : listed.map((knowledgeBase) => knowledgeBase.route);
+  const inferenceRoutes = selected
+    ? [selected.inferenceRoute]
+    : listed.map((knowledgeBase) => knowledgeBase.inferenceRoute);
+
+  return {
+    name: "Querylight Search API",
+    mode,
+    description: "HTTP access to Querylight's local JSON DSL search.",
+    capabilities: {
+      search: {
+        routes: searchRoutes,
+        methods: ["GET", "POST"],
+        requestBody: "Querylight JSON DSL object. An empty body returns default match_all results.",
+        clauses: ["query", "knn", "sparse_vector", "neural_sparse", "rrf", "vector_rescore", "sparse_vector_rescore"],
+        vectorFields: {
+          dense: "embedding",
+          sparse: "sparse"
+        },
+        response: "OpenSearch-like hits with stored Querylight chunk and document fields."
+      },
+      inference: {
+        routes: inferenceRoutes,
+        method: "POST",
+        requestBody: {
+          text: "Query text to encode.",
+          mode: "Optional. dense, sparse, or both. Defaults to both.",
+          modes: "Optional array containing dense and/or sparse."
+        },
+        response: "Dense vectors and/or sparse token-weight maps for use in _search vector clauses."
+      },
+      knowledgeBases: {
+        route: "/_knowledge_bases",
+        method: "GET",
+        description: "Lists mounted knowledge base prefixes and search routes."
+      },
+      help: {
+        routes: mode === "single" ? ["/_help", "/<configured-index-name>/_help"] : ["/_help", "/<directory-name>/_help"],
+        method: "GET",
+        description: "Returns this help payload."
+      },
+      vectors: {
+        request: "Vector clauses use Elasticsearch-style JSON DSL. Send dense vectors in knn.vector and sparse token weights in sparse_vector.vector or neural_sparse.vector.",
+        production: "Use _infer to produce dense vectors or sparse token-weight maps before submitting vector queries to _search.",
+        rrf: "Use query.rrf.queries to combine lexical, dense, and sparse clauses with reciprocal rank fusion.",
+        servedFields: "qli serve loads dense artifacts into the embedding field and sparse artifacts into the sparse field when those artifacts exist."
+      }
+    },
+    fields: [
+      "text",
+      "title",
+      "uri",
+      "sourceId",
+      "sourceName",
+      "sourceType",
+      "tags",
+      "publicationDate",
+      "firstSeenAt",
+      "lastSeenAt",
+      "lastChangedAt",
+      "crawledAt",
+      "metadata.<key>"
+    ],
+    queryExamples: {
+      inference: [
+        {
+          name: "Produce dense and sparse query vectors",
+          method: "POST",
+          route: inferenceRoutes[0] ?? "/_infer",
+          body: {
+            text: "authentication flow",
+            mode: "both"
+          }
+        },
+        {
+          name: "Produce only a dense vector",
+          method: "POST",
+          route: inferenceRoutes[0] ?? "/_infer",
+          body: {
+            text: "authentication flow",
+            mode: "dense"
+          }
+        }
+      ],
+      httpWithoutVectors: [
+        {
+          name: "Keyword search",
+          method: "POST",
+          route: searchRoutes[0] ?? "/_search",
+          body: {
+            query: {
+              match: {
+                text: "authentication"
+              }
+            },
+            size: 5,
+            highlight: {
+              fields: {
+                text: {}
+              }
+            }
+          }
+        },
+        {
+          name: "Filter by source type",
+          method: "POST",
+          route: searchRoutes[0] ?? "/_search",
+          body: {
+            query: {
+              bool: {
+                must: [
+                  {
+                    match: {
+                      text: "pricing"
+                    }
+                  }
+                ],
+                filter: [
+                  {
+                    term: {
+                      sourceType: "rss"
+                    }
+                  }
+                ]
+              }
+            },
+            size: 10
+          }
+        },
+        {
+          name: "Aggregate by source type",
+          method: "POST",
+          route: searchRoutes[0] ?? "/_search",
+          body: {
+            query: {
+              match_all: {}
+            },
+            size: 0,
+            aggs: {
+              types: {
+                terms: {
+                  field: "sourceType",
+                  size: 10
+                }
+              }
+            }
+          }
+        }
+      ],
+      vectorDsl: [
+        {
+          name: "Dense vector search",
+          method: "POST",
+          route: searchRoutes[0] ?? "/_search",
+          body: {
+            knn: {
+              field: "embedding",
+              vector: [0.12, -0.04, 0.98],
+              k: 10
+            },
+            size: 10
+          }
+        },
+        {
+          name: "Sparse vector search",
+          method: "POST",
+          route: searchRoutes[0] ?? "/_search",
+          body: {
+            sparse_vector: {
+              field: "sparse",
+              vector: {
+                "42": 0.91,
+                "314": 0.62
+              },
+              k: 10
+            },
+            size: 10
+          }
+        },
+        {
+          name: "Hybrid search with reciprocal rank fusion",
+          method: "POST",
+          route: searchRoutes[0] ?? "/_search",
+          body: {
+            query: {
+              rrf: {
+                queries: [
+                  {
+                    match: {
+                      text: {
+                        query: "authentication flow",
+                        operator: "and"
+                      }
+                    }
+                  },
+                  {
+                    knn: {
+                      field: "embedding",
+                      vector: [0.12, -0.04, 0.98],
+                      k: 50
+                    }
+                  },
+                  {
+                    sparse_vector: {
+                      field: "sparse",
+                      vector: {
+                        "42": 0.91,
+                        "314": 0.62
+                      },
+                      k: 50
+                    }
+                  }
+                ],
+                rank_constant: 20,
+                weights: [3, 1, 1]
+              }
+            },
+            size: 10
+          }
+        }
+      ]
+    },
+    vectorSetup: {
+      cli: [
+        "qli models pull --dense --sparse",
+        "qli rebuild --dense --sparse"
+      ],
+      serveFields: [
+        "Dense vector artifacts are served from the embedding field.",
+        "Sparse vector artifacts are served from the sparse field.",
+        "Use _infer to turn query text into dense vectors or sparse token-weight maps before _search.",
+        "Keep _search compatible with the JSON DSL instead of adding retrieval or retrievalMode request flags."
+      ]
+    },
+    notes: [
+      "_search passes the request to the Querylight JSON DSL executor.",
+      "Do not use non-standard retrieval or retrievalMode flags in _search bodies.",
+      "The vector examples use short sample vectors. Use _infer output in real requests.",
+      "Call _infer first when a caller has text and needs dense or sparse query vectors.",
+      "In multi-KB mode, each child directory or .zip file has its own route prefix.",
+      "Packaged .zip knowledge bases are mounted read-only."
+    ],
+    knowledgeBases: selected ? [selected] : listed
+  };
+}
+
+function resolveKnowledgeBaseForHelpPath(
+  pathname: string,
+  mode: "single" | "multi",
+  knowledgeBases: Map<string, ServedKnowledgeBase>
+): ServedKnowledgeBase | undefined | null {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 1 && segments[0] === "_help") {
+    return undefined;
+  }
+  if (mode === "single") {
+    const knowledgeBase = [...knowledgeBases.values()][0];
+    if (segments.length === 2 && segments[1] === "_help" && knowledgeBase && segments[0] === knowledgeBase.configuredIndexName) {
+      return knowledgeBase;
+    }
+    return null;
+  }
+  if (segments.length === 2 && segments[1] === "_help") {
+    return knowledgeBases.get(segments[0]!) ?? null;
+  }
+  return null;
+}
+
+function handleHelpRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  pathname: string,
+  mode: "single" | "multi",
+  knowledgeBases: ServedKnowledgeBase[],
+  knowledgeBasesByName: Map<string, ServedKnowledgeBase>
+): void {
+  if (request.method !== "GET") {
+    response.setHeader("allow", "GET");
+    sendError(response, 405, "method_not_allowed", `unsupported method for ${pathname}`);
+    return;
+  }
+  const selected = resolveKnowledgeBaseForHelpPath(pathname, mode, knowledgeBasesByName);
+  if (selected === null) {
+    sendError(response, 404, "resource_not_found_exception", `unknown help route: ${pathname}`);
+    return;
+  }
+  sendJson(response, 200, buildHelpPayload(mode, knowledgeBases, selected));
 }
 
 function resolveKnowledgeBaseForPath(
@@ -409,6 +791,96 @@ function resolveKnowledgeBaseForPath(
     return knowledgeBases.get(segments[0]!) ?? null;
   }
   return null;
+}
+
+function resolveKnowledgeBaseForInferencePath(
+  pathname: string,
+  mode: "single" | "multi",
+  knowledgeBases: Map<string, ServedKnowledgeBase>
+): ServedKnowledgeBase | null {
+  const segments = pathname.split("/").filter(Boolean);
+  if (mode === "single") {
+    const knowledgeBase = [...knowledgeBases.values()][0];
+    if (!knowledgeBase) {
+      return null;
+    }
+    if (segments.length === 1 && segments[0] === "_infer") {
+      return knowledgeBase;
+    }
+    if (segments.length === 2 && segments[1] === "_infer" && segments[0] === knowledgeBase.configuredIndexName) {
+      return knowledgeBase;
+    }
+    return null;
+  }
+
+  if (segments.length === 2 && segments[1] === "_infer") {
+    return knowledgeBases.get(segments[0]!) ?? null;
+  }
+  return null;
+}
+
+async function handleInferenceRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  pathname: string,
+  mode: "single" | "multi",
+  knowledgeBases: Map<string, ServedKnowledgeBase>
+): Promise<void> {
+  if (request.method !== "POST") {
+    response.setHeader("allow", "POST");
+    sendError(response, 405, "method_not_allowed", `unsupported method for ${pathname}`);
+    return;
+  }
+
+  const knowledgeBase = resolveKnowledgeBaseForInferencePath(pathname, mode, knowledgeBases);
+  if (!knowledgeBase) {
+    sendError(response, 404, "resource_not_found_exception", `unknown inference route: ${pathname}`);
+    return;
+  }
+
+  try {
+    const requestBody = parseInferenceRequest(await readRequestBody(request));
+    const text = requestBody.text ?? requestBody.input;
+    if (typeof text !== "string" || text.trim().length === 0) {
+      throw new CliError("text is required", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+    }
+    const modes = requestedInferenceModes(requestBody);
+    const payload: Record<string, unknown> = {
+      text,
+      fields: {
+        dense: "embedding",
+        sparse: "sparse"
+      }
+    };
+    if (modes.includes("dense")) {
+      payload.dense = {
+        modelId: knowledgeBase.config.retrieval.dense.modelId,
+        vector: await inferDenseVector({
+          workspacePath: knowledgeBase.readableWorkspacePath,
+          config: knowledgeBase.config.retrieval.dense,
+          text
+        })
+      };
+    }
+    if (modes.includes("sparse")) {
+      payload.sparse = {
+        modelId: knowledgeBase.config.retrieval.sparse.modelId,
+        vector: await inferSparseVector({
+          workspacePath: knowledgeBase.readableWorkspacePath,
+          config: knowledgeBase.config.retrieval.sparse,
+          text
+        })
+      };
+    }
+    sendJson(response, 200, payload);
+  } catch (error) {
+    if (error instanceof CliError && error.code === "INVALID_ARGUMENT") {
+      sendError(response, 400, "parse_exception", error.message);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    sendError(response, 500, "inference_execution_exception", message);
+  }
 }
 
 async function handleSearchRequest(
@@ -472,6 +944,14 @@ export async function startSearchApiServer(
         return;
       }
       handleKnowledgeBaseList(response, mode, knowledgeBases);
+      return;
+    }
+    if (url.pathname === "/_help" || url.pathname.endsWith("/_help")) {
+      handleHelpRequest(request, response, url.pathname, mode, knowledgeBases, byName);
+      return;
+    }
+    if (url.pathname === "/_infer" || url.pathname.endsWith("/_infer")) {
+      await handleInferenceRequest(request, response, url.pathname, mode, byName);
       return;
     }
     await handleSearchRequest(request, response, url.pathname, mode, byName);

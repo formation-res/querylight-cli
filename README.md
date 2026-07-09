@@ -143,9 +143,12 @@ qli serve
 ```
 
 `qli serve` loads each knowledge base index once and reuses it for later requests.
+Use `GET /_help` to inspect routes, fields, and JSON DSL examples.
 Use `GET /_knowledge_bases` to list the mounted knowledge base prefixes.
+Use `POST /_infer` to produce dense and sparse query vectors from text.
 Use `POST /_search` or `POST /<configured-index-name>/_search` for a single workspace.
 Use `POST /<directory-name>/_search` when `--workspace` points to a directory whose children are packaged `.zip` workspaces or directories that contain `.kb`.
+Use `POST /<directory-name>/_infer` before vector searches in multi-KB mode.
 Packaged `.zip` knowledge bases are mounted read-only from the archive. `qli serve` does not extract them to workspace directories.
 
 ## Example Skill: `qli` with `bunx` and `uv`
@@ -448,10 +451,68 @@ qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
 
 For a single workspace, use `POST /_search` or `POST /<configured-index-name>/_search`.
 For a directory of knowledge bases, use `POST /<directory-name>/_search`. Child `.zip` files use the file stem as the route name.
+Use `POST /_infer` or `POST /<directory-name>/_infer` to turn query text into vectors before vector search.
 Use `GET /_knowledge_bases` to list the available prefixes before querying.
+Use `GET /_help` for route and request examples.
 The request body must be a Querylight JSON DSL object.
 Packaged `.zip` knowledge bases are mounted read-only from the archive. `qli serve` does not extract them to workspace directories.
 Index files are loaded once per knowledge base and reused across requests.
+
+Build query vectors:
+
+```bash
+curl -s http://127.0.0.1:4000/_infer \
+  -H 'content-type: application/json' \
+  -d '{"text":"authentication flow","mode":"both"}'
+```
+
+Use the returned `dense.vector` with `knn`:
+
+```json
+{
+  "knn": {
+    "field": "embedding",
+    "vector": [0.12, -0.04, 0.98],
+    "k": 10
+  },
+  "size": 10
+}
+```
+
+Use the returned `sparse.vector` with `sparse_vector` or `neural_sparse`:
+
+```json
+{
+  "sparse_vector": {
+    "field": "sparse",
+    "vector": {
+      "42": 0.91,
+      "314": 0.62
+    },
+    "k": 10
+  },
+  "size": 10
+}
+```
+
+Combine lexical, dense, and sparse retrieval with reciprocal rank fusion:
+
+```json
+{
+  "query": {
+    "rrf": {
+      "queries": [
+        { "match": { "text": { "query": "authentication flow", "operator": "and" } } },
+        { "knn": { "field": "embedding", "vector": [0.12, -0.04, 0.98], "k": 50 } },
+        { "sparse_vector": { "field": "sparse", "vector": { "42": 0.91, "314": 0.62 }, "k": 50 } }
+      ],
+      "rank_constant": 20,
+      "weights": [3, 1, 1]
+    }
+  },
+  "size": 10
+}
+```
 
 ### Change Inspection
 

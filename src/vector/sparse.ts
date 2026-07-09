@@ -195,3 +195,20 @@ export async function sparseQuery(
   const index = new SparseVectorFieldIndex().loadState(payload.indexState as SparseVectorFieldIndexState);
   return index.query(vector, topK);
 }
+
+export async function inferSparseVector(
+  {
+    workspacePath,
+    config,
+    text
+  }: {
+    workspacePath: string;
+    config: WorkspaceConfig["retrieval"]["sparse"];
+    text: string;
+  }
+): Promise<SparseVector> {
+  const payload = await readSparsePayload(workspacePath);
+  const cacheDir = resolveCacheDir(workspacePath, config.cacheDir);
+  const encode = await createSparseQueryEncoder(cacheDir, config.modelId, payload.queryTokenWeights);
+  return encode(text);
+}
