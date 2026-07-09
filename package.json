@@ -47,25 +47,25 @@
     "commander": "^15.0.0",
     "fast-glob": "^3.3.3",
     "feedparser": "^2.6.0",
-    "feedsmith": "^2.9.4",
+    "feedsmith": "^2.9.5",
     "fflate": "^0.8.3",
     "gray-matter": "^4.0.3",
     "mammoth": "^1.12.0",
     "pdf-parse": "^2.4.5",
     "picocolors": "^1.1.1",
-    "stream-json": "^3.4.0",
+    "stream-json": "^3.5.0",
     "turndown": "^7.2.4",
     "yaml": "^2.9.0",
     "yauzl": "^3.4.0"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.1",
     "@types/pdf-parse": "^1.1.5",
     "@types/turndown": "^5.0.6",
     "@types/yauzl": "^3.4.0",
     "tsup": "^8.5.1",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "esbuild": "^0.28.1"
