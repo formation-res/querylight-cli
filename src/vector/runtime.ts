@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { DenseVectorModelConfig, SparseVectorModelConfig } from "../types/models.js";
 import { fileExists } from "../core/files.js";
 
@@ -90,9 +90,10 @@ export async function runSparsePython(
   const scriptPath = await sparseScriptPath(importMetaUrl);
   const payloadDir = await mkdtemp(path.join(os.tmpdir(), "qli-sparse-"));
   const payloadPath = path.join(payloadDir, "payload.json");
-  await writeFile(payloadPath, JSON.stringify(payload), "utf8");
+  const outputPath = path.join(payloadDir, "output.json");
+  await writeFile(payloadPath, JSON.stringify({ ...payload, output_path: outputPath }), "utf8");
   try {
-    return sparseExecFileSync(
+    const stdout = sparseExecFileSync(
       "uv",
       [
         "run",
@@ -115,6 +116,10 @@ export async function runSparsePython(
         }
       }
     );
+    if (await fileExists(outputPath)) {
+      return readFile(outputPath, "utf8");
+    }
+    return stdout;
   } finally {
     await rm(payloadDir, { recursive: true, force: true });
   }

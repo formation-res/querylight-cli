@@ -106,6 +106,7 @@ async function buildSparseDocuments(
       action: "encode_documents",
       model_id: config.modelId,
       top_tokens: config.documentTopTokens,
+      batch_size: config.documentBatchSize,
       documents: chunks.map((chunk) => ({
         chunkId: chunk.id,
         text: createSparseChunkText(chunk)
@@ -157,6 +158,7 @@ export async function buildSparseVectors(
     modelId: config.modelId,
     vocabularySize: built.vocabularySize,
     documentTopTokens: config.documentTopTokens,
+    documentBatchSize: config.documentBatchSize,
     queryEncoding: config.queryEncoding,
     documentEncoding: config.documentEncoding,
     chunkCount: built.chunks.length,

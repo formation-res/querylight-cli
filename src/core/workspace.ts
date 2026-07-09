@@ -12,6 +12,7 @@ const DIRS = [
   "indexes",
   "vectors",
   "runs",
+  "locks",
   "logs"
 ] as const;
 

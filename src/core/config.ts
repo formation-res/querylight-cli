@@ -52,6 +52,7 @@ export const defaultConfig = (): WorkspaceConfig => ({
       modelId: "opensearch-project/opensearch-neural-sparse-encoding-doc-v2-mini",
       cacheDir: DEFAULT_SHARED_MODEL_CACHE_DIR,
       documentTopTokens: 128,
+      documentBatchSize: 16,
       queryEncoding: "tokenizer-token-weights",
       documentEncoding: "masked-lm-max-log1p-relu",
       chunkTextMode: "title-heading-text"

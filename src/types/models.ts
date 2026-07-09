@@ -115,6 +115,7 @@ export type SparseVectorModelConfig = {
   modelId: string;
   cacheDir: string;
   documentTopTokens: number;
+  documentBatchSize: number;
   queryEncoding: "tokenizer-token-weights";
   documentEncoding: "masked-lm-max-log1p-relu";
   chunkTextMode: "title-heading-text";
@@ -135,6 +136,7 @@ export type SparseVectorMetadata = {
   modelId: string;
   vocabularySize: number;
   documentTopTokens: number;
+  documentBatchSize: number;
   queryEncoding: "tokenizer-token-weights";
   documentEncoding: "masked-lm-max-log1p-relu";
   chunkCount: number;

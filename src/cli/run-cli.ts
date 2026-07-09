@@ -5,6 +5,7 @@ import { chunkDocuments } from "../chunk/chunker.js";
 import { DEFAULT_WORKSPACE, PACKAGE_VERSION } from "../core/constants.js";
 import { loadConfig } from "../core/config.js";
 import { CliError, ExitCode } from "../core/errors.js";
+import { withWorkspaceLock } from "../core/locks.js";
 import { assertWorkspaceExists, ensureWorkspace } from "../core/workspace.js";
 import { assertWritableWorkspacePath, packageWorkspaceArchive, resolveReadableWorkspace } from "../core/archive.js";
 import { buildIndex } from "../index/querylight-indexer.js";
@@ -771,14 +772,14 @@ Examples:
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
-      const result = await runIngestCommand({
+      const result = await withWorkspaceLock(workspace, "write", "ingest", () => runIngestCommand({
         workspace,
         sourceId: options.source,
         changedOnly: Boolean(options.changedOnly),
         dense: Boolean(options.dense),
         sparse: Boolean(options.sparse),
         progress: createProgressHandler(capture, global)
-      });
+      }));
       emit(global.json, capture, response("ingest", workspace, result), `Processed ${result.ingest.processedSources} sources, wrote ${result.chunk.chunksWritten} chunks`);
     });
 
@@ -795,12 +796,12 @@ Examples:
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
-      const result = await chunkDocuments({
+      const result = await withWorkspaceLock(workspace, "write", "chunk", () => chunkDocuments({
         workspacePath: workspace,
         sourceId: options.source,
         documentId: options.document,
         progress: createProgressHandler(capture, global)
-      });
+      }));
       emit(global.json, capture, response("chunk", workspace, result), `Wrote ${result.chunksWritten} chunks`);
     });
 
@@ -817,12 +818,12 @@ Examples:
     .action(async function command(options) {
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
-      const result = await reprocessDocuments({
+      const result = await withWorkspaceLock(workspace, "write", "reprocess", () => reprocessDocuments({
         workspacePath: workspace,
         sourceId: options.source,
         documentId: options.document,
         progress: createProgressHandler(capture, global)
-      });
+      }));
       emit(global.json, capture, response("reprocess", workspace, result), `Reprocessed ${result.documentsReprocessed} documents`);
     });
 
@@ -839,16 +840,16 @@ Examples:
   qli index build --dense --sparse
   qli index build --silent`)
     .action(async function command(options) {
-    const global = this.optsWithGlobals();
-    const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
-    const result = await buildIndex({
-      workspacePath: workspace,
-      denseOverride: options.dense ? true : undefined,
-      sparseOverride: options.sparse ? true : undefined,
-      progress: createProgressHandler(capture, global)
+      const global = this.optsWithGlobals();
+      const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
+      const result = await withWorkspaceLock(workspace, "write", "index build", () => buildIndex({
+        workspacePath: workspace,
+        denseOverride: options.dense ? true : undefined,
+        sparseOverride: options.sparse ? true : undefined,
+        progress: createProgressHandler(capture, global)
+      }));
+      emit(global.json, capture, response("index build", workspace, result), `Built index at ${result.indexPath}`);
     });
-    emit(global.json, capture, response("index build", workspace, result), `Built index at ${result.indexPath}`);
-  });
 
   program.command("rebuild")
     .description("Run ingest, chunk, and index build in one command.")
@@ -867,26 +868,28 @@ Examples:
       const global = this.optsWithGlobals();
       const workspace = await resolveWorkspace({ workspace: global.workspace }, { writable: true });
       const progress = createProgressHandler(capture, global);
-      progress?.("info", "Rebuild step 1/3: ingest");
-      const ingest = await ingestSources({
-        workspacePath: workspace,
-        sourceIds: options.source ? [options.source] : undefined,
-        changedOnly: Boolean(options.changedOnly),
-        progress
+      const data = await withWorkspaceLock(workspace, "write", "rebuild", async () => {
+        progress?.("info", "Rebuild step 1/3: ingest");
+        const ingest = await ingestSources({
+          workspacePath: workspace,
+          sourceIds: options.source ? [options.source] : undefined,
+          changedOnly: Boolean(options.changedOnly),
+          progress
+        });
+        progress?.("info", "Rebuild step 2/3: chunk");
+        const chunk = await chunkDocuments({ workspacePath: workspace, sourceId: options.source, progress });
+        progress?.("info", "Rebuild step 3/3: index");
+        const indexBuild = await buildIndex({
+          workspacePath: workspace,
+          denseOverride: options.dense ? true : undefined,
+          sparseOverride: options.sparse ? true : undefined,
+          buildAvailableModels: true,
+          progress
+        });
+        progress?.("info", "Rebuild complete");
+        return { ingest, chunk, indexPath: indexBuild.indexPath, metadata: indexBuild.metadata };
       });
-      progress?.("info", "Rebuild step 2/3: chunk");
-      const chunk = await chunkDocuments({ workspacePath: workspace, sourceId: options.source, progress });
-      progress?.("info", "Rebuild step 3/3: index");
-      const indexBuild = await buildIndex({
-        workspacePath: workspace,
-        denseOverride: options.dense ? true : undefined,
-        sparseOverride: options.sparse ? true : undefined,
-        buildAvailableModels: true,
-        progress
-      });
-      const data = { ingest, chunk, indexPath: indexBuild.indexPath, metadata: indexBuild.metadata };
-      progress?.("info", "Rebuild complete");
-      emit(global.json, capture, response("rebuild", workspace, data), `Processed ${ingest.processedSources} sources, wrote ${chunk.chunksWritten} chunks`);
+      emit(global.json, capture, response("rebuild", workspace, data), `Processed ${data.ingest.processedSources} sources, wrote ${data.chunk.chunksWritten} chunks`);
     });
 
   program.command("package")

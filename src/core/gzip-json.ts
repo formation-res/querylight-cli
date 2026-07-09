@@ -2,19 +2,18 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { Readable } from "node:stream";
+import { Transform } from "node:stream";
 import { Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip, createGunzip } from "node:zlib";
 import path from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { parser } from "stream-json";
-import disassembler from "stream-json/disassembler.js";
-import stringer from "stream-json/stringer.js";
 import { streamValues, type StreamValuesItem } from "stream-json/streamers/stream-values.js";
 import { fileExists } from "./files.js";
 
 export async function writeGzipJson(filePath: string, value: unknown): Promise<void> {
-  await writeGzipStream(filePath, jsonStringStream(value));
+  await writeGzipStream(filePath, jsonTextStream(value));
 }
 
 export async function writeGzipSerialized(filePath: string, value: unknown): Promise<void> {
@@ -39,12 +38,38 @@ export async function readGzipSerialized<T>(filePath: string): Promise<T> {
 async function writeGzipStream(filePath: string, source: Readable): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const abortController = new AbortController();
+  const timeoutMs = Number.parseInt(process.env.QLI_GZIP_WRITE_STALL_TIMEOUT_MS ?? "120000", 10);
+  let timeout: NodeJS.Timeout | undefined;
+  const resetTimeout = () => {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return;
+    }
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(() => {
+      abortController.abort(new Error(`timed out writing ${filePath}; no gzip output for ${timeoutMs}ms`));
+    }, timeoutMs);
+  };
+  const progress = new Transform({
+    transform(chunk, _encoding, callback) {
+      resetTimeout();
+      callback(null, chunk);
+    }
+  });
   try {
-    await pipeline(source, createGzip(), createWriteStream(temporaryPath));
+    resetTimeout();
+    await pipeline(source, createGzip(), progress, createWriteStream(temporaryPath), { signal: abortController.signal });
     await rename(temporaryPath, filePath);
   } catch (error) {
+    source.destroy();
     await rm(temporaryPath, { force: true });
     throw error;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -74,8 +99,17 @@ export async function resolveExistingGzipOrFilePath(gzipPath: string, legacyPath
   return gzipPath;
 }
 
-function jsonStringStream(value: unknown): Readable {
-  return Readable.from([value]).pipe(disassembler.asStream()).pipe(stringer.asStream());
+function jsonTextStream(value: unknown): Readable {
+  const json = JSON.stringify(value);
+  if (json === undefined) {
+    throw new TypeError("cannot write unsupported JSON value");
+  }
+  const chunkSize = 1024 * 1024;
+  return Readable.from((function* chunks() {
+    for (let offset = 0; offset < json.length; offset += chunkSize) {
+      yield json.slice(offset, offset + chunkSize);
+    }
+  })());
 }
 
 async function readJsonFile<T>(filePath: string, gzipped: boolean): Promise<T> {

@@ -6,6 +6,7 @@ import { buildIndex } from "../src/index/querylight-indexer.js";
 import { readLatestIndexState } from "../src/index/index-store.js";
 import { chunkDocuments } from "../src/chunk/chunker.js";
 import { ensureWorkspace } from "../src/core/workspace.js";
+import { withWorkspaceLock } from "../src/core/locks.js";
 import { writeJsonl } from "../src/core/jsonl.js";
 import { ingestSources } from "../src/ingest/ingest-service.js";
 import { searchIndex, searchResultsFromResponse } from "../src/query/search-service.js";
@@ -40,6 +41,27 @@ describe("workspace lifecycle", () => {
     await expect(stat(path.join(result.workspacePath, "documents"))).resolves.toBeDefined();
     await expect(stat(path.join(result.workspacePath, "chunks"))).resolves.toBeDefined();
     await expect(stat(path.join(result.workspacePath, "indexes"))).resolves.toBeDefined();
+    await expect(stat(path.join(result.workspacePath, "locks"))).resolves.toBeDefined();
+  });
+
+  it("prevents overlapping workspace writers", async () => {
+    const workspace = await tempWorkspace();
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(workspace, ".kb") });
+    let release!: () => void;
+    let acquired!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      acquired = resolve;
+    });
+    const first = withWorkspaceLock(workspacePath, "write", "first", () => new Promise<void>((resolve) => {
+      acquired();
+      release = resolve;
+    }));
+
+    await locked;
+    await expect(withWorkspaceLock(workspacePath, "write", "second", async () => undefined)).rejects.toThrow(/workspace is locked/i);
+    release();
+    await first;
+    await expect(withWorkspaceLock(workspacePath, "write", "third", async () => "ok")).resolves.toBe("ok");
   });
 
   it("stores sources with duplicate URI protection", async () => {

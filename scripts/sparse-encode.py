@@ -45,14 +45,7 @@ def build_query_token_weight_vector(tokenizer, model_id: str):
     return vector
 
 
-def encode_document(model, tokenizer, text: str, top_tokens: int, special_token_ids: list[int]):
-    features = tokenizer([text], padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False)
-    output = model(**features).logits
-    values, _ = torch.max(output * features["attention_mask"].unsqueeze(-1), dim=1)
-    values = torch.log1p(torch.relu(values))
-    values[:, special_token_ids] = 0
-
-    row = values[0].detach()
+def sparse_vector_from_row(row, top_tokens: int):
     nonzero = torch.nonzero(row > 0, as_tuple=True)[0]
     if len(nonzero) == 0:
         return {}
@@ -70,9 +63,21 @@ def encode_document(model, tokenizer, text: str, top_tokens: int, special_token_
     return vector
 
 
+def encode_document_batch(model, tokenizer, texts: list[str], top_tokens: int, special_token_ids: list[int]):
+    features = tokenizer(texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False)
+    with torch.no_grad():
+        output = model(**features).logits
+    values, _ = torch.max(output * features["attention_mask"].unsqueeze(-1), dim=1)
+    values = torch.log1p(torch.relu(values))
+    values[:, special_token_ids] = 0
+
+    return [sparse_vector_from_row(row.detach(), top_tokens) for row in values]
+
+
 def load_runtime(model_id: str):
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForMaskedLM.from_pretrained(model_id)
+    model.eval()
     special_token_ids = [
         tokenizer.vocab[token]
         for value in tokenizer.special_tokens_map.values()
@@ -85,27 +90,37 @@ def load_runtime(model_id: str):
 def download_only(model_id: str):
     tokenizer, _, _ = load_runtime(model_id)
     query_weights = build_query_token_weight_vector(tokenizer, model_id)
-    json.dump({
+    return {
         "ok": True,
         "vocabularySize": tokenizer.vocab_size,
         "queryTokenWeightsLength": len(query_weights)
-    }, sys.stdout)
+    }
 
 
-def encode_documents(model_id: str, top_tokens: int, documents):
+def encode_documents(model_id: str, top_tokens: int, batch_size: int, documents):
     tokenizer, model, special_token_ids = load_runtime(model_id)
     output_documents = []
-    for document in documents:
-        output_documents.append({
-            "chunkId": document["chunkId"],
-            "vector": encode_document(model, tokenizer, document["text"], top_tokens, special_token_ids)
-        })
+    batch_size = max(1, batch_size)
+    for offset in range(0, len(documents), batch_size):
+        batch = documents[offset:offset + batch_size]
+        vectors = encode_document_batch(
+            model,
+            tokenizer,
+            [document["text"] for document in batch],
+            top_tokens,
+            special_token_ids,
+        )
+        for document, vector in zip(batch, vectors):
+            output_documents.append({
+                "chunkId": document["chunkId"],
+                "vector": vector
+            })
 
-    json.dump({
+    return {
         "query_token_weights": build_query_token_weight_vector(tokenizer, model_id),
         "documents": output_documents,
         "vocabularySize": tokenizer.vocab_size
-    }, sys.stdout)
+    }
 
 
 def main():
@@ -117,12 +132,18 @@ def main():
     action = payload["action"]
     model_id = payload["model_id"]
     if action == "download_only":
-        download_only(model_id)
-        return
-    if action == "encode_documents":
-        encode_documents(model_id, int(payload["top_tokens"]), payload["documents"])
-        return
-    raise SystemExit(f"unsupported action: {action}")
+        output = download_only(model_id)
+    elif action == "encode_documents":
+        output = encode_documents(model_id, int(payload["top_tokens"]), int(payload.get("batch_size", 16)), payload["documents"])
+    else:
+        raise SystemExit(f"unsupported action: {action}")
+
+    output_path = payload.get("output_path")
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(output, handle)
+    else:
+        json.dump(output, sys.stdout)
 
 
 if __name__ == "__main__":
