@@ -13,7 +13,7 @@ import { deleteDocumentArtifacts } from "./document-utils.js";
 import { listDirectoryFiles } from "./adapters/directory-adapter.js";
 import { ingestFile, ingestInlineContent, reprocessStoredDocument } from "./adapters/file-adapter.js";
 import { parseRssFeedDocument } from "./adapters/rss-adapter.js";
-import { fetchUrlDocument, reprocessRemoteDocument } from "./adapters/url-adapter.js";
+import { fetchUrlDocument, normalizeFetchedUrlDocument, reprocessRemoteDocument } from "./adapters/url-adapter.js";
 import { crawlWebsite } from "./adapters/website-adapter.js";
 
 function documentsFile(workspacePath: string): string {
@@ -261,11 +261,13 @@ export async function ingestSources(
         await ingestOne(source.uri, () => fetchUrlDocument({ workspacePath, source, url: source.uri, previous: previous.get(stableId("doc", source.id, source.uri)) }));
       } else if (source.type === "website") {
         reportProgress(progress, `Crawling ${source.uri}`);
-        const urls = await crawlWebsite(source, {
+        const crawl = await crawlWebsite(source, {
           userAgent: defaultUserAgent,
           rateLimitMs: defaultRateLimitMs,
           maxConcurrentRequests
         }, progress);
+        const urls = crawl.urls;
+        const crawledPages = new Map(crawl.pages.map((page) => [page.url, page]));
         reportProgress(progress, `Fetched ${urls.length} page${urls.length === 1 ? "" : "s"} from crawl`);
         const seenCanonicalUrls = new Set<string>();
         await mapWithConcurrency(urls, maxConcurrentRequests, async (url) => {
@@ -273,8 +275,20 @@ export async function ingestSources(
             reportProgressDetail(progress, `Skipped canonical duplicate ${url}`);
             return;
           }
-          reportProgress(progress, `Fetching ${url}`);
-          const document = await ingestOne(url, () => fetchUrlDocument({ workspacePath, source, url, previous: previous.get(stableId("doc", source.id, url)) }));
+          const cachedPage = crawledPages.get(url);
+          const previousDocument = previous.get(stableId("doc", source.id, url));
+          reportProgress(progress, `${cachedPage ? "Processing" : "Fetching"} ${url}`);
+          const document = await ingestOne(url, () => cachedPage
+            ? normalizeFetchedUrlDocument({
+              workspacePath,
+              source,
+              url,
+              previous: previousDocument,
+              body: cachedPage.body,
+              status: cachedPage.status,
+              headers: cachedPage.headers
+            })
+            : fetchUrlDocument({ workspacePath, source, url, previous: previousDocument }));
           if (document) {
             seenCanonicalUrls.add(document.uri);
           }

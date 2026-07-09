@@ -4,6 +4,18 @@ import { reportProgress, type ProgressHandler } from "../../core/progress.js";
 import { normalizeRemoteUrl } from "../../core/urls.js";
 import type { Source } from "../../types/models.js";
 
+export type CrawledPage = {
+  url: string;
+  body: string;
+  status: number;
+  headers: Record<string, string>;
+};
+
+export type CrawlWebsiteResult = {
+  urls: string[];
+  pages: CrawledPage[];
+};
+
 async function fetchRobotsDisallow(url: URL, userAgent: string): Promise<string[]> {
   try {
     const response = await fetch(new URL("/robots.txt", url), { headers: { "user-agent": userAgent } });
@@ -72,6 +84,14 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function responseHeaders(response: Response): Record<string, string> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  return headers;
+}
+
 export async function crawlWebsite(
   source: Source,
   defaults: {
@@ -80,7 +100,7 @@ export async function crawlWebsite(
     maxConcurrentRequests: number;
   },
   progress?: ProgressHandler
-): Promise<string[]> {
+): Promise<CrawlWebsiteResult> {
   const baseUrl = new URL(source.uri);
   const userAgent = source.crawl?.userAgent ?? defaults.userAgent;
   const includePatterns = source.crawl?.includePatterns ?? [];
@@ -92,6 +112,7 @@ export async function crawlWebsite(
   const disallowRules = source.crawl?.obeyRobotsTxt === false ? [] : await fetchRobotsDisallow(baseUrl, userAgent);
   const seen = new Set<string>();
   const results: string[] = [];
+  const pages: CrawledPage[] = [];
   let currentLevel = [normalizeRemoteUrl(source.uri)];
 
   if (source.crawl?.useSitemap !== false) {
@@ -131,10 +152,19 @@ export async function crawlWebsite(
       break;
     }
 
-    await mapWithConcurrency(allowedUrls, maxConcurrentRequests, async (pageUrl) => {
+    await mapWithConcurrency(allowedUrls, maxConcurrentRequests, async (pageUrl, index) => {
+      if (rateLimitMs > 0 && index > 0) {
+        await delay(rateLimitMs);
+      }
       const page = new URL(pageUrl);
       const response = await fetch(page, { headers: { "user-agent": userAgent } });
       const html = await response.text();
+      pages.push({
+        url: pageUrl,
+        body: html,
+        status: response.status,
+        headers: responseHeaders(response)
+      });
       const $ = load(html);
       $("a[href]").each((_, element) => {
         const href = $(element).attr("href");
@@ -147,12 +177,9 @@ export async function crawlWebsite(
           // ignore bad links
         }
       });
-      if (rateLimitMs > 0) {
-        await delay(rateLimitMs);
-      }
     });
 
     currentLevel = nextLevelCandidates;
   }
-  return results;
+  return { urls: results, pages };
 }

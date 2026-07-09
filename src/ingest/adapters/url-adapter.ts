@@ -17,14 +17,27 @@ export type FetchRemoteDocumentOptions = {
   publicationDate?: string | null;
 };
 
-function buildHttpCache(response: Response, validatedAt: string): HttpCacheMetadata {
+export type FetchedRemoteDocumentOptions = FetchRemoteDocumentOptions & {
+  body: string;
+  status: number;
+  headers: Headers | Record<string, string>;
+};
+
+function headerValue(headers: Headers | Record<string, string>, name: string): string | null {
+  if (headers instanceof Headers) {
+    return headers.get(name);
+  }
+  return headers[name.toLowerCase()] ?? headers[name] ?? null;
+}
+
+function buildHttpCache(status: number, headers: Headers | Record<string, string>, validatedAt: string): HttpCacheMetadata {
   return {
-    etag: response.headers.get("etag") ?? undefined,
-    lastModified: response.headers.get("last-modified") ?? undefined,
-    cacheControl: response.headers.get("cache-control") ?? undefined,
-    expires: response.headers.get("expires"),
+    etag: headerValue(headers, "etag") ?? undefined,
+    lastModified: headerValue(headers, "last-modified") ?? undefined,
+    cacheControl: headerValue(headers, "cache-control") ?? undefined,
+    expires: headerValue(headers, "expires"),
     lastValidatedAt: validatedAt,
-    lastStatus: response.status
+    lastStatus: status
   };
 }
 
@@ -140,7 +153,7 @@ export async function fetchUrlDocument(
 
   const response = await fetch(url, { headers });
   const now = new Date().toISOString();
-  const nextHttpCache = buildHttpCache(response, now);
+  const nextHttpCache = buildHttpCache(response.status, response.headers, now);
   const effectiveSourceUri = sourceUri ?? source.uri;
 
   if (response.status === 304 && previous?.rawPath && await fileExists(previous.rawPath) && await fileExists(previous.normalizedPath)) {
@@ -191,6 +204,50 @@ export async function fetchUrlDocument(
       }
     }),
     httpCache: nextHttpCache
+  };
+}
+
+export async function normalizeFetchedUrlDocument(
+  {
+    workspacePath,
+    source,
+    url,
+    previous,
+    sourceUri,
+    publicationDate,
+    body,
+    status,
+    headers
+  }: FetchedRemoteDocumentOptions
+): Promise<DocumentRecord> {
+  const now = new Date().toISOString();
+  const effectiveSourceUri = sourceUri ?? source.uri;
+  const contentType = headerValue(headers, "content-type") ?? "text/html";
+  const document = await normalizeRemoteDocument({
+    workspacePath,
+    source,
+    url,
+    body,
+    previous,
+    sourceUri: effectiveSourceUri,
+    publicationDate,
+    responseStatus: status
+  });
+  return {
+    ...document,
+    mimeType: contentType,
+    metadata: buildDocumentMetadata({
+      source,
+      sourceUri: effectiveSourceUri,
+      publicationDate: document.publicationDate ?? null,
+      crawledAt: document.crawledAt,
+      indexedAt: document.indexedAt,
+      extra: {
+        status,
+        contentType
+      }
+    }),
+    httpCache: buildHttpCache(status, headers, now)
   };
 }
 

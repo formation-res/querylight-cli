@@ -132,6 +132,47 @@ describe("conditional remote ingest", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("https://example.com/cdn-cgi/l/email-protection", expect.anything());
   });
 
+  it("reuses pages fetched during website crawl discovery", async () => {
+    const root = await tempWorkspace("qli-website-crawl-reuse-");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    const source = await addSource(workspacePath, {
+      type: "website",
+      uri: "https://example.com/",
+      name: "Example",
+      enabled: true,
+      tags: ["site"],
+      metadata: {},
+      crawl: { maxDepth: 1, maxPages: 10, useSitemap: false, rateLimitMs: 0 },
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z"
+    });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://example.com/robots.txt") {
+        return new Response("", { status: 404 });
+      }
+      if (url === "https://example.com/") {
+        return new Response(`<!doctype html><html><head><title>Home</title></head><body><main>
+          <a href="/one">One</a>
+          <a href="/two">Two</a>
+        </main></body></html>`, { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return new Response(htmlPage(url.split("/").pop() ?? "Page", "Body"), {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ingestSources({ workspacePath, sourceIds: [source.id] });
+
+    const calls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(calls.filter((url) => url === "https://example.com/")).toHaveLength(1);
+    expect(calls.filter((url) => url === "https://example.com/one")).toHaveLength(1);
+    expect(calls.filter((url) => url === "https://example.com/two")).toHaveLength(1);
+  });
+
   it("indexes a canonical website page only once across aliases", async () => {
     const root = await tempWorkspace("qli-website-canonical-");
     const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
