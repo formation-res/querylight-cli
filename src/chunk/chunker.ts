@@ -2,10 +2,13 @@ import { readFile } from "node:fs/promises";
 import matter from "gray-matter";
 import path from "node:path";
 import { loadConfig } from "../core/config.js";
+import { CliError, ExitCode } from "../core/errors.js";
+import { fileExists } from "../core/files.js";
 import { sha256 } from "../core/hashing.js";
 import { stableId } from "../core/ids.js";
 import { readJsonl } from "../core/jsonl.js";
 import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
+import { resolveStoredWorkspacePath } from "../core/workspace-paths.js";
 import type { ChunkRecord, DocumentRecord, WorkspaceConfig } from "../types/models.js";
 import { loadChunks, saveChunks } from "./chunk-store.js";
 
@@ -149,7 +152,15 @@ export async function chunkDocuments(
 
   for (const document of filtered) {
     reportProgressDetail(progress, `Chunking ${document.id} (${document.title})`);
-    const raw = await readFile(document.normalizedPath, "utf8");
+    const normalizedPath = await resolveStoredWorkspacePath(workspacePath, document.normalizedPath, "normalized");
+    if (!await fileExists(normalizedPath)) {
+      throw new CliError(
+        `normalized document is missing for ${document.id}: ${normalizedPath}. Run \`qli ingest\` to recreate workspace artifacts.`,
+        "DOCUMENT_ARTIFACT_MISSING",
+        ExitCode.IndexError
+      );
+    }
+    const raw = await readFile(normalizedPath, "utf8");
     for (const chunk of buildChunksForDocument(document, raw, config, prior)) {
       nextChunks.set(chunk.id, chunk);
     }

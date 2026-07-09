@@ -7,6 +7,7 @@ import { stableId } from "../core/ids.js";
 import { readJsonl, writeJsonl } from "../core/jsonl.js";
 import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
 import { writeRun } from "../core/runs.js";
+import { resolveStoredWorkspacePath } from "../core/workspace-paths.js";
 import type { DocumentRecord, RunRecord, Source } from "../types/models.js";
 import { listSources } from "../sources/source-store.js";
 import { deleteDocumentArtifacts } from "./document-utils.js";
@@ -80,7 +81,7 @@ async function purgeDocuments(
   await Promise.all(
     documents
       .filter((document) => documentIds.has(document.id))
-      .map((document) => deleteDocumentArtifacts(document))
+      .map((document) => deleteDocumentArtifacts(document, workspacePath))
   );
 }
 
@@ -408,15 +409,18 @@ export async function reprocessDocuments(
   for (const document of targets) {
     reportProgressDetail(progress, `Reprocessing ${document.id} (${document.title})`);
     const source = sourceMap.get(document.sourceId);
-    if (!source || !document.rawPath || !await fileExists(document.rawPath)) {
+    const rawPath = document.rawPath ? await resolveStoredWorkspacePath(workspacePath, document.rawPath, "raw") : undefined;
+    const normalizedPath = await resolveStoredWorkspacePath(workspacePath, document.normalizedPath, "normalized");
+    if (!source || !rawPath || !await fileExists(rawPath)) {
       documentsSkipped += 1;
       reportProgressDetail(progress, `Skipped ${document.id}: raw source not available`);
       continue;
     }
 
+    const relocatedDocument = { ...document, rawPath, normalizedPath };
     const updated = source.type === "url" || source.type === "website" || source.type === "rss"
-      ? await reprocessRemoteDocument(document, source)
-      : await reprocessStoredDocument(document, source);
+      ? await reprocessRemoteDocument(relocatedDocument, source)
+      : await reprocessStoredDocument(relocatedDocument, source);
 
     if (!updated) {
       documentsSkipped += 1;

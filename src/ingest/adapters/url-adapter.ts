@@ -5,6 +5,7 @@ import { fileExists } from "../../core/files.js";
 import { sha256 } from "../../core/hashing.js";
 import { stableId } from "../../core/ids.js";
 import { normalizeRemoteUrl } from "../../core/urls.js";
+import { resolveStoredWorkspacePath } from "../../core/workspace-paths.js";
 import { buildDocumentMetadata, writeNormalizedDocument } from "../document-utils.js";
 import { extractCanonicalUriFromHtml, extractHtmlToMarkdown, extractPublicationDateFromHtml } from "../extractors/html-extractor.js";
 
@@ -156,9 +157,17 @@ export async function fetchUrlDocument(
   const nextHttpCache = buildHttpCache(response.status, response.headers, now);
   const effectiveSourceUri = sourceUri ?? source.uri;
 
-  if (response.status === 304 && previous?.rawPath && await fileExists(previous.rawPath) && await fileExists(previous.normalizedPath)) {
+  const previousRawPath = previous?.rawPath
+    ? await resolveStoredWorkspacePath(workspacePath, previous.rawPath, "raw")
+    : undefined;
+  const previousNormalizedPath = previous
+    ? await resolveStoredWorkspacePath(workspacePath, previous.normalizedPath, "normalized")
+    : undefined;
+  if (response.status === 304 && previous && previousRawPath && previousNormalizedPath && await fileExists(previousRawPath) && await fileExists(previousNormalizedPath)) {
     return {
       ...previous,
+      rawPath: previousRawPath,
+      normalizedPath: previousNormalizedPath,
       sourceUri: effectiveSourceUri,
       publicationDate: publicationDate ?? previous.publicationDate ?? null,
       metadata: buildDocumentMetadata({

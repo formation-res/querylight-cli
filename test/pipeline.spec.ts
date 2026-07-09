@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -114,6 +114,40 @@ describe("pipeline behavior", () => {
     await chunkDocuments({ workspacePath, sourceId: docsA.id });
     const afterFiltered = await loadChunks(workspacePath);
     expect(new Set(afterFiltered.map((chunk) => chunk.sourceId))).toEqual(new Set([docsA.id, docsB.id]));
+  });
+
+  it("chunks normalized documents after the workspace directory is renamed", async () => {
+    const originalRoot = await tempWorkspace("qli-relocate-original-");
+    const relocatedRoot = await tempWorkspace("qli-relocate-new-");
+    await rm(relocatedRoot, { recursive: true, force: true });
+    const { workspacePath: originalWorkspacePath } = await ensureWorkspace({ workspacePath: path.join(originalRoot, ".kb") });
+    const normalizedPath = path.join(originalWorkspacePath, "normalized", "doc-relocated.md");
+    await writeFile(normalizedPath, "# Relocated\n\nThe normalized document moved with the workspace.\n", "utf8");
+    await writeJsonl(path.join(originalWorkspacePath, "documents", "documents.jsonl"), [
+      {
+        id: "doc-relocated",
+        sourceId: "src-relocated",
+        sourceType: "markdown",
+        title: "Relocated",
+        uri: "inline:relocated",
+        sourceUri: "inline:relocated",
+        mimeType: "text/markdown",
+        normalizedPath,
+        contentHash: "hash-relocated",
+        metadata: { sourceType: "markdown" },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    await rename(originalRoot, relocatedRoot);
+    const relocatedWorkspacePath = path.join(relocatedRoot, ".kb");
+    const result = await chunkDocuments({ workspacePath: relocatedWorkspacePath });
+    const chunks = await loadChunks(relocatedWorkspacePath);
+
+    expect(result.chunksWritten).toBe(1);
+    expect(chunks[0]?.documentId).toBe("doc-relocated");
   });
 
   it("builds searchable indexes with source, tag, and metadata filters", async () => {

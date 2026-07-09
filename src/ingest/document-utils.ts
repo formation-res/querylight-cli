@@ -1,5 +1,6 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resolveStoredWorkspacePath } from "../core/workspace-paths.js";
 import type { DocumentRecord, Metadata, PrimitiveMetadata, Source } from "../types/models.js";
 import { withFrontmatter } from "../normalize/normalize-markdown.js";
 
@@ -91,9 +92,15 @@ export async function writeNormalizedDocument(
   );
 }
 
-export async function deleteDocumentArtifacts(document: DocumentRecord): Promise<void> {
+export async function deleteDocumentArtifacts(document: DocumentRecord, workspacePath?: string): Promise<void> {
+  const rawPath = document.rawPath && workspacePath
+    ? await resolveStoredWorkspacePath(workspacePath, document.rawPath, "raw")
+    : document.rawPath;
+  const normalizedPath = workspacePath
+    ? await resolveStoredWorkspacePath(workspacePath, document.normalizedPath, "normalized")
+    : document.normalizedPath;
   await Promise.all([
-    document.rawPath ? rm(document.rawPath, { force: true }) : Promise.resolve(),
-    rm(document.normalizedPath, { force: true })
+    rawPath ? rm(rawPath, { force: true }) : Promise.resolve(),
+    rm(normalizedPath, { force: true })
   ]);
 }
