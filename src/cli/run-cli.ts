@@ -1010,7 +1010,7 @@ Notes:
     });
 
   program.command("serve")
-    .description("Start a small HTTP API that exposes Querylight JSON DSL search through an OpenSearch-like _search endpoint.")
+    .description("Start a small HTTP API that exposes simple search and Querylight JSON DSL search.")
     .option("--host <host>", "Host interface to bind. Defaults to 127.0.0.1.", "127.0.0.1")
     .option("--port <n>", "Port to bind. Use 0 to let the OS choose a free port.", "3000")
     .addHelpText("after", `
@@ -1024,14 +1024,19 @@ Routes:
   API help: GET /_help
   List mounted knowledge bases: GET /_knowledge_bases
   Build query vectors: POST /_infer
+  Single workspace: POST /_simplesearch
   Single workspace: POST /_search
+  Single workspace: POST /<configured-index-name>/_simplesearch
   Single workspace: POST /<configured-index-name>/_search
   Single workspace: POST /<configured-index-name>/_infer
+  Multi-KB root: POST /<directory-name>/_simplesearch
   Multi-KB root: POST /<directory-name>/_search
   Multi-KB root: POST /<directory-name>/_infer
 
 Notes:
-  The request body must be a Querylight JSON DSL object.
+  _simplesearch accepts qli search options in a JSON body or query string.
+  _simplesearch defaults to hybrid retrieval and performs vector inference inside the request when vector indexes exist.
+  The _search request body must be a Querylight JSON DSL object.
   _search follows the JSON DSL. Do not use non-standard retrieval or retrievalMode flags.
   Use _infer to produce dense and sparse query vectors from text.
   Use knn with field "embedding" for dense vector search.

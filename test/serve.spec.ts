@@ -283,6 +283,50 @@ describe("search api server", () => {
     }
   });
 
+  it("serves _simplesearch with one-step hybrid retrieval", async () => {
+    const root = await tempWorkspace("qli-serve-simple-vector-");
+    const workspace = await buildVectorWorkspace(root);
+    const server = await startSearchApiServer({ workspacePath: workspace, host: "127.0.0.1", port: 0 });
+
+    try {
+      const response = await fetch(`${server.url}/_simplesearch`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          query: "sparse token weights",
+          topK: 5
+        })
+      });
+      const parsed = await response.json() as { retrievalMode: string; hits: { hits: Array<{ _id: string }> } };
+
+      expect(response.status).toBe(200);
+      expect(parsed.retrievalMode).toBe("hybrid");
+      expect(parsed.hits.hits[0]?._id).toBe("chunk-sparse");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves _simplesearch with CLI-style filters from query params", async () => {
+    const root = await tempWorkspace("qli-serve-simple-");
+    const workspace = await buildWorkspace(root, "Local Docs");
+    const server = await startSearchApiServer({ workspacePath: workspace, host: "127.0.0.1", port: 0 });
+
+    try {
+      const response = await fetch(`${server.url}/_simplesearch?q=authentication&top-k=5&source-type=directory&show-chunks=true`, {
+        method: "GET"
+      });
+      const parsed = await response.json() as { retrievalMode: string; hits: { hits: Array<{ _source: { title: string; text?: string } }> } };
+
+      expect(response.status).toBe(200);
+      expect(parsed.retrievalMode).toBe("hybrid");
+      expect(parsed.hits.hits[0]?._source.title).toContain("API Authentication");
+      expect(parsed.hits.hits[0]?._source.text?.toLowerCase()).toContain("authentication");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves multiple knowledge bases from a parent directory and keeps searches working after index files are removed", async () => {
     const root = await tempWorkspace("qli-serve-multi-");
     const alphaRoot = path.join(root, "alpha");
@@ -348,13 +392,14 @@ describe("search api server", () => {
       const parsed = await response.json() as {
         mode: string;
         prefixes: string[];
-        knowledgeBases: Array<{ name: string; prefix: string; route: string; inferenceRoute: string; storage: string }>;
+        knowledgeBases: Array<{ name: string; prefix: string; route: string; simpleSearchRoute: string; inferenceRoute: string; storage: string }>;
       };
 
       expect(response.status).toBe(200);
       expect(parsed.mode).toBe("multi");
       expect(parsed.prefixes.sort()).toEqual(["/alpha", "/beta"]);
       expect(parsed.knowledgeBases.map((knowledgeBase) => knowledgeBase.route).sort()).toEqual(["/alpha/_search", "/beta/_search"]);
+      expect(parsed.knowledgeBases.map((knowledgeBase) => knowledgeBase.simpleSearchRoute).sort()).toEqual(["/alpha/_simplesearch", "/beta/_simplesearch"]);
       expect(parsed.knowledgeBases.map((knowledgeBase) => knowledgeBase.inferenceRoute).sort()).toEqual(["/alpha/_infer", "/beta/_infer"]);
       expect(parsed.knowledgeBases.every((knowledgeBase) => knowledgeBase.storage === "archive")).toBe(true);
     } finally {
@@ -372,6 +417,7 @@ describe("search api server", () => {
       const parsed = await response.json() as {
         capabilities: {
           inference: { routes: string[] };
+          simpleSearch: { routes: string[]; requestBody: { retrieval: string } };
           search: { clauses: string[]; vectorFields: { dense: string; sparse: string } };
         };
         queryExamples: { vectorDsl: Array<{ body: unknown }> };
@@ -379,6 +425,8 @@ describe("search api server", () => {
 
       expect(response.status).toBe(200);
       expect(parsed.capabilities.inference.routes).toContain("/_infer");
+      expect(parsed.capabilities.simpleSearch.routes).toContain("/_simplesearch");
+      expect(parsed.capabilities.simpleSearch.requestBody.retrieval).toContain("Defaults to hybrid");
       expect(parsed.capabilities.search.clauses).toContain("rrf");
       expect(parsed.capabilities.search.vectorFields).toEqual({ dense: "embedding", sparse: "sparse" });
       expect(JSON.stringify(parsed.queryExamples.vectorDsl)).toContain("sparse_vector");

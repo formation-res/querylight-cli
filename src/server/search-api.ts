@@ -18,12 +18,12 @@ import { assertWorkspaceExists } from "../core/workspace.js";
 import { isWorkspaceArchivePath, resolveReadableWorkspace } from "../core/archive.js";
 import { CliError, ExitCode } from "../core/errors.js";
 import { fileExists } from "../core/files.js";
-import { hydrateIndexState, loadHydratedIndex, searchJsonRequest } from "../query/search-service.js";
+import { hydrateIndexState, loadHydratedIndex, searchIndex, searchJsonRequest } from "../query/search-service.js";
 import type { DocumentIndex, JsonDslRequest, JsonDslResponse } from "@tryformation/querylight-ts";
 import { inferDenseVector } from "../vector/dense.js";
 import { inferSparseVector } from "../vector/sparse.js";
 import { denseVectorPath, readDensePayload, readSparsePayload, sparseVectorPath } from "../vector/store.js";
-import type { WorkspaceConfig } from "../types/models.js";
+import type { RetrievalMode, SearchResponseData, SourceType, WorkspaceConfig } from "../types/models.js";
 
 type ServedKnowledgeBase = {
   name: string;
@@ -46,6 +46,31 @@ type InferenceRequest = {
   modes?: InferenceMode[];
 };
 
+type SimpleSearchDateField = "publicationDate" | "firstSeenAt" | "lastSeenAt" | "lastChangedAt" | "crawledAt";
+
+type SimpleSearchRequest = {
+  query: string;
+  topK?: string | number;
+  source?: string;
+  sourceIds?: string[];
+  sourceName?: string;
+  sourceNames?: string[];
+  sourceType?: string;
+  sourceTypes?: SourceType[];
+  uriPrefix?: string;
+  uriPrefixes?: string[];
+  tag?: string;
+  tags?: string[];
+  metadata?: Array<{ key: string; value: string }>;
+  since?: string;
+  until?: string;
+  changedSince?: string;
+  hasPublicationDate?: boolean;
+  dateRanges: Array<{ field: SimpleSearchDateField; from?: string; to?: string }>;
+  retrievalMode: RetrievalMode;
+  showChunks: boolean;
+};
+
 export type SearchApiServerInfo = {
   mode: "single" | "multi";
   url: string;
@@ -55,6 +80,7 @@ export type SearchApiServerInfo = {
     configuredIndexName: string;
     prefix: string;
     route: string;
+    simpleSearchRoute: string;
     inferenceRoute: string;
     storage: "directory" | "archive";
   }>;
@@ -397,6 +423,23 @@ function parseSearchRequest(raw: string): JsonDslRequest {
   }
 }
 
+function parseJsonObject(raw: string): Record<string, unknown> {
+  const normalized = raw.trim();
+  if (normalized.length === 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("expected a JSON object");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError(`invalid JSON request: ${message}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+}
+
 function parseInferenceRequest(raw: string): InferenceRequest {
   const normalized = raw.trim();
   if (normalized.length === 0) {
@@ -412,6 +455,258 @@ function parseInferenceRequest(raw: string): InferenceRequest {
     const message = error instanceof Error ? error.message : String(error);
     throw new CliError(`invalid JSON request: ${message}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
   }
+}
+
+function firstDefined<T>(...values: Array<T | undefined>): T | undefined {
+  return values.find((value) => value !== undefined);
+}
+
+function optionValue(body: Record<string, unknown>, params: URLSearchParams, ...names: string[]): unknown {
+  for (const name of names) {
+    if (body[name] !== undefined) {
+      return body[name];
+    }
+    const param = params.get(name);
+    if (param !== null) {
+      return param;
+    }
+  }
+  return undefined;
+}
+
+function stringOption(body: Record<string, unknown>, params: URLSearchParams, ...names: string[]): string | undefined {
+  const value = optionValue(body, params, ...names);
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new CliError(`${names[0]} must be a string`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return value;
+}
+
+function positiveIntegerOption(body: Record<string, unknown>, params: URLSearchParams, ...names: string[]): string | number | undefined {
+  const value = optionValue(body, params, ...names);
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return value;
+  }
+  throw new CliError(`${names[0]} must be a positive integer`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+}
+
+function booleanOption(body: Record<string, unknown>, params: URLSearchParams, ...names: string[]): boolean {
+  const value = optionValue(body, params, ...names);
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    if (value === "" || value === "true" || value === "1") {
+      return true;
+    }
+    if (value === "false" || value === "0") {
+      return false;
+    }
+  }
+  throw new CliError(`${names[0]} must be a boolean`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+}
+
+function parseCommaSeparatedList(input: string | undefined): string[] | undefined {
+  const values = (input ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function stringListOption(body: Record<string, unknown>, params: URLSearchParams, singularName: string, pluralName: string): string[] | undefined {
+  const value = optionValue(body, params, pluralName, singularName);
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    const values = value.map((item) => {
+      if (typeof item !== "string") {
+        throw new CliError(`${pluralName} must contain strings`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+      }
+      return item.trim();
+    }).filter(Boolean);
+    return values.length > 0 ? values : undefined;
+  }
+  if (typeof value === "string") {
+    return parseCommaSeparatedList(value);
+  }
+  throw new CliError(`${pluralName} must be an array or comma-separated string`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+}
+
+function parseSourceType(input: string): SourceType {
+  const normalized = input === "page" ? "url" : input;
+  const supported = new Set<SourceType>(["url", "website", "rss", "file", "directory", "markdown", "text"]);
+  if (!supported.has(normalized as SourceType)) {
+    throw new CliError(`unsupported source type: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return normalized as SourceType;
+}
+
+function parseSourceTypesOption(body: Record<string, unknown>, params: URLSearchParams): SourceType[] | undefined {
+  return stringListOption(body, params, "sourceType", "sourceTypes")?.map(parseSourceType);
+}
+
+function parseRetrievalMode(input: string | undefined): RetrievalMode {
+  if (!input) {
+    return "hybrid";
+  }
+  const supported = new Set<RetrievalMode>(["lexical", "dense", "sparse", "hybrid"]);
+  if (!supported.has(input as RetrievalMode)) {
+    throw new CliError(`unsupported retrieval mode: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return input as RetrievalMode;
+}
+
+function parseDateValue(input: string, optionName: string): string {
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new CliError(`invalid date for ${optionName}: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return parsed.toISOString();
+}
+
+function parseMetadataOption(body: Record<string, unknown>, params: URLSearchParams): Array<{ key: string; value: string }> | undefined {
+  const value = optionValue(body, params, "metadata");
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (typeof item === "string") {
+        const idx = item.indexOf("=");
+        if (idx <= 0) {
+          throw new CliError(`invalid metadata entry: ${item}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+        }
+        return { key: item.slice(0, idx), value: item.slice(idx + 1) };
+      }
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const entry = item as Record<string, unknown>;
+        if (typeof entry.key === "string" && typeof entry.value === "string") {
+          return { key: entry.key, value: entry.value };
+        }
+      }
+      throw new CliError("metadata must contain key=value strings or { key, value } objects", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+    });
+  }
+  if (typeof value === "string") {
+    return parseCommaSeparatedList(value)?.map((item) => {
+      const idx = item.indexOf("=");
+      if (idx <= 0) {
+        throw new CliError(`invalid metadata entry: ${item}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+      }
+      return { key: item.slice(0, idx), value: item.slice(idx + 1) };
+    });
+  }
+  if (typeof value === "object") {
+    return Object.entries(value).map(([key, entryValue]) => {
+      if (typeof entryValue !== "string") {
+        throw new CliError("metadata object values must be strings", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+      }
+      return { key, value: entryValue };
+    });
+  }
+  throw new CliError("metadata must be an object, array, or comma-separated string", "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+}
+
+function parseSimpleSearchDateRanges(body: Record<string, unknown>, params: URLSearchParams): Array<{ field: SimpleSearchDateField; from?: string; to?: string }> {
+  const ranges: Array<{ field: SimpleSearchDateField; from?: string; to?: string }> = [];
+  const since = stringOption(body, params, "since");
+  const until = stringOption(body, params, "until");
+  if (since || until) {
+    ranges.push({
+      field: "publicationDate",
+      from: since ? parseDateValue(since, "since") : undefined,
+      to: until ? parseDateValue(until, "until") : undefined
+    });
+  }
+  const changedSince = stringOption(body, params, "changedSince", "changed-since");
+  if (changedSince) {
+    ranges.push({ field: "lastChangedAt", from: parseDateValue(changedSince, "changedSince") });
+  }
+  const dateFieldOptions: Array<{ field: SimpleSearchDateField; from: string[]; to: string[] }> = [
+    { field: "publicationDate", from: ["publicationDateFrom", "publication-date-from"], to: ["publicationDateTo", "publication-date-to"] },
+    { field: "firstSeenAt", from: ["firstSeenAtFrom", "first-seen-at-from"], to: ["firstSeenAtTo", "first-seen-at-to"] },
+    { field: "lastSeenAt", from: ["lastSeenAtFrom", "last-seen-at-from"], to: ["lastSeenAtTo", "last-seen-at-to"] },
+    { field: "lastChangedAt", from: ["lastChangedAtFrom", "last-changed-at-from"], to: ["lastChangedAtTo", "last-changed-at-to"] },
+    { field: "crawledAt", from: ["crawledAtFrom", "crawled-at-from"], to: ["crawledAtTo", "crawled-at-to"] }
+  ];
+  for (const option of dateFieldOptions) {
+    const from = stringOption(body, params, ...option.from);
+    const to = stringOption(body, params, ...option.to);
+    if (!from && !to) {
+      continue;
+    }
+    ranges.push({
+      field: option.field,
+      from: from ? parseDateValue(from, option.from[0]!) : undefined,
+      to: to ? parseDateValue(to, option.to[0]!) : undefined
+    });
+  }
+  return ranges;
+}
+
+function parseOptionalPositiveInteger(input: string | number | undefined, optionName: string): number | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  const value = Number(input);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new CliError(`invalid positive integer for ${optionName}: ${input}`, "INVALID_ARGUMENT", ExitCode.InvalidArguments);
+  }
+  return value;
+}
+
+function resolveSimpleSearchTopK(input: string | number | undefined, sourceTypes: SourceType[] | undefined, dateRanges: Array<{ field: SimpleSearchDateField; from?: string; to?: string }>, defaultTopK: number): number {
+  const explicitTopK = parseOptionalPositiveInteger(input, "topK");
+  if (explicitTopK !== undefined) {
+    return explicitTopK;
+  }
+  if ((sourceTypes ?? []).includes("rss") && dateRanges.length > 0) {
+    return 500;
+  }
+  return defaultTopK;
+}
+
+function parseSimpleSearchRequest(raw: string, params: URLSearchParams): SimpleSearchRequest {
+  const body = parseJsonObject(raw);
+  const sourceTypes = parseSourceTypesOption(body, params);
+  const dateRanges = parseSimpleSearchDateRanges(body, params);
+  const retrieval = firstDefined(
+    stringOption(body, params, "retrieval"),
+    stringOption(body, params, "retrievalMode", "retrieval-mode")
+  );
+  return {
+    query: stringOption(body, params, "query", "q") ?? "",
+    topK: positiveIntegerOption(body, params, "topK", "top-k", "size"),
+    source: stringOption(body, params, "source"),
+    sourceIds: stringListOption(body, params, "sourceId", "sourceIds"),
+    sourceName: stringOption(body, params, "sourceName", "source-name"),
+    sourceNames: stringListOption(body, params, "sourceName", "sourceNames"),
+    sourceType: stringOption(body, params, "sourceType", "source-type"),
+    sourceTypes,
+    uriPrefix: stringOption(body, params, "uriPrefix", "uri-prefix"),
+    uriPrefixes: stringListOption(body, params, "uriPrefix", "uriPrefixes"),
+    hasPublicationDate: booleanOption(body, params, "hasPublicationDate", "has-publication-date"),
+    tag: stringOption(body, params, "tag"),
+    tags: stringListOption(body, params, "tag", "tags"),
+    metadata: parseMetadataOption(body, params),
+    since: stringOption(body, params, "since"),
+    until: stringOption(body, params, "until"),
+    changedSince: stringOption(body, params, "changedSince", "changed-since"),
+    dateRanges,
+    retrievalMode: parseRetrievalMode(retrieval),
+    showChunks: booleanOption(body, params, "showChunks", "show-chunks")
+  };
 }
 
 function requestedInferenceModes(request: InferenceRequest): InferenceMode[] {
@@ -434,6 +729,10 @@ function routeForKnowledgeBase(mode: "single" | "multi", knowledgeBase: ServedKn
   return mode === "single" ? "/_search" : `/${knowledgeBase.name}/_search`;
 }
 
+function simpleSearchRouteForKnowledgeBase(mode: "single" | "multi", knowledgeBase: ServedKnowledgeBase): string {
+  return mode === "single" ? "/_simplesearch" : `/${knowledgeBase.name}/_simplesearch`;
+}
+
 function inferenceRouteForKnowledgeBase(mode: "single" | "multi", knowledgeBase: ServedKnowledgeBase): string {
   return mode === "single" ? "/_infer" : `/${knowledgeBase.name}/_infer`;
 }
@@ -449,6 +748,7 @@ function publicKnowledgeBases(mode: "single" | "multi", knowledgeBases: ServedKn
     configuredIndexName: knowledgeBase.configuredIndexName,
     prefix: prefixForKnowledgeBase(mode, knowledgeBase),
     route: routeForKnowledgeBase(mode, knowledgeBase),
+    simpleSearchRoute: simpleSearchRouteForKnowledgeBase(mode, knowledgeBase),
     inferenceRoute: inferenceRouteForKnowledgeBase(mode, knowledgeBase),
     storage: knowledgeBase.storage
   }));
@@ -479,6 +779,9 @@ function buildHelpPayload(
   const searchRoutes = selected
     ? [selected.route]
     : listed.map((knowledgeBase) => knowledgeBase.route);
+  const simpleSearchRoutes = selected
+    ? [selected.simpleSearchRoute]
+    : listed.map((knowledgeBase) => knowledgeBase.simpleSearchRoute);
   const inferenceRoutes = selected
     ? [selected.inferenceRoute]
     : listed.map((knowledgeBase) => knowledgeBase.inferenceRoute);
@@ -486,7 +789,7 @@ function buildHelpPayload(
   return {
     name: "Querylight Search API",
     mode,
-    description: "HTTP access to Querylight's local JSON DSL search.",
+    description: "HTTP access to Querylight simple search and JSON DSL search.",
     capabilities: {
       search: {
         routes: searchRoutes,
@@ -498,6 +801,18 @@ function buildHelpPayload(
           sparse: "sparse"
         },
         response: "OpenSearch-like hits with stored Querylight chunk and document fields."
+      },
+      simpleSearch: {
+        routes: simpleSearchRoutes,
+        methods: ["GET", "POST"],
+        requestBody: {
+          query: "Text query. Omit it to list the latest matching documents.",
+          topK: "Maximum number of results. Defaults to search.defaultTopK. RSS searches with a time window use 500 when omitted.",
+          retrieval: "Optional. lexical, dense, sparse, or hybrid. Defaults to hybrid.",
+          filters: ["source", "sourceName", "sourceType", "uriPrefix", "tag", "metadata", "since", "until", "changedSince", "hasPublicationDate"],
+          showChunks: "Optional boolean. Returns chunk-level matches when true."
+        },
+        response: "The same SearchResponseData shape returned by qli search --json."
       },
       inference: {
         routes: inferenceRoutes,
@@ -563,6 +878,15 @@ function buildHelpPayload(
         }
       ],
       httpWithoutVectors: [
+        {
+          name: "Simple hybrid search",
+          method: "POST",
+          route: simpleSearchRoutes[0] ?? "/_simplesearch",
+          body: {
+            query: "authentication",
+            topK: 5
+          }
+        },
         {
           name: "Keyword search",
           method: "POST",
@@ -714,6 +1038,7 @@ function buildHelpPayload(
     },
     notes: [
       "_search passes the request to the Querylight JSON DSL executor.",
+      "_simplesearch accepts qli search options, defaults to hybrid retrieval, and performs vector inference inside the request.",
       "Do not use non-standard retrieval or retrievalMode flags in _search bodies.",
       "The vector examples use short sample vectors. Use _infer output in real requests.",
       "Call _infer first when a caller has text and needs dense or sparse query vectors.",
@@ -788,6 +1113,32 @@ function resolveKnowledgeBaseForPath(
   }
 
   if (segments.length === 2 && segments[1] === "_search") {
+    return knowledgeBases.get(segments[0]!) ?? null;
+  }
+  return null;
+}
+
+function resolveKnowledgeBaseForSimpleSearchPath(
+  pathname: string,
+  mode: "single" | "multi",
+  knowledgeBases: Map<string, ServedKnowledgeBase>
+): ServedKnowledgeBase | null {
+  const segments = pathname.split("/").filter(Boolean);
+  if (mode === "single") {
+    const knowledgeBase = [...knowledgeBases.values()][0];
+    if (!knowledgeBase) {
+      return null;
+    }
+    if (segments.length === 1 && segments[0] === "_simplesearch") {
+      return knowledgeBase;
+    }
+    if (segments.length === 2 && segments[1] === "_simplesearch" && segments[0] === knowledgeBase.configuredIndexName) {
+      return knowledgeBase;
+    }
+    return null;
+  }
+
+  if (segments.length === 2 && segments[1] === "_simplesearch") {
     return knowledgeBases.get(segments[0]!) ?? null;
   }
   return null;
@@ -922,6 +1273,53 @@ async function handleSearchRequest(
   }
 }
 
+async function handleSimpleSearchRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  mode: "single" | "multi",
+  knowledgeBases: Map<string, ServedKnowledgeBase>
+): Promise<void> {
+  if (request.method !== "GET" && request.method !== "POST") {
+    response.setHeader("allow", "GET, POST");
+    sendError(response, 405, "method_not_allowed", `unsupported method for ${url.pathname}`);
+    return;
+  }
+
+  const knowledgeBase = resolveKnowledgeBaseForSimpleSearchPath(url.pathname, mode, knowledgeBases);
+  if (!knowledgeBase) {
+    sendError(response, 404, "resource_not_found_exception", `unknown simple search route: ${url.pathname}`);
+    return;
+  }
+
+  try {
+    const simpleRequest = parseSimpleSearchRequest(await readRequestBody(request), url.searchParams);
+    const result: SearchResponseData = await searchIndex({
+      workspacePath: knowledgeBase.readableWorkspacePath,
+      query: simpleRequest.query,
+      topK: resolveSimpleSearchTopK(simpleRequest.topK, simpleRequest.sourceTypes, simpleRequest.dateRanges, knowledgeBase.config.search.defaultTopK),
+      sourceIds: firstDefined(simpleRequest.sourceIds, parseCommaSeparatedList(simpleRequest.source)),
+      sourceNames: firstDefined(simpleRequest.sourceNames, parseCommaSeparatedList(simpleRequest.sourceName)),
+      sourceTypes: firstDefined(simpleRequest.sourceTypes, simpleRequest.sourceType ? [parseSourceType(simpleRequest.sourceType)] : undefined),
+      uriPrefixes: firstDefined(simpleRequest.uriPrefixes, parseCommaSeparatedList(simpleRequest.uriPrefix)),
+      hasPublicationDate: simpleRequest.hasPublicationDate,
+      tags: firstDefined(simpleRequest.tags, parseCommaSeparatedList(simpleRequest.tag)),
+      metadata: simpleRequest.metadata,
+      dateRanges: simpleRequest.dateRanges,
+      retrievalMode: simpleRequest.retrievalMode,
+      showChunks: simpleRequest.showChunks
+    });
+    sendJson(response, 200, result);
+  } catch (error) {
+    if (error instanceof CliError && error.code === "INVALID_ARGUMENT") {
+      sendError(response, 400, "parse_exception", error.message);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    sendError(response, 500, "search_phase_execution_exception", message);
+  }
+}
+
 export async function startSearchApiServer(
   {
     workspacePath,
@@ -952,6 +1350,10 @@ export async function startSearchApiServer(
     }
     if (url.pathname === "/_infer" || url.pathname.endsWith("/_infer")) {
       await handleInferenceRequest(request, response, url.pathname, mode, byName);
+      return;
+    }
+    if (url.pathname === "/_simplesearch" || url.pathname.endsWith("/_simplesearch")) {
+      await handleSimpleSearchRequest(request, response, url, mode, byName);
       return;
     }
     await handleSearchRequest(request, response, url.pathname, mode, byName);

@@ -119,6 +119,9 @@ qli search "API authentication"
 qli search --workspace ./docs-kb.zip "API authentication"
 qli search --source-type rss --since 2026-05-01 --has-publication-date
 qli search-json '{"query":{"match":{"text":"API authentication"}},"size":5}'
+curl -X POST http://127.0.0.1:3000/_simplesearch \
+  -H 'content-type: application/json' \
+  -d '{"query":"API authentication","topK":5}'
 curl -X POST http://127.0.0.1:3000/_search \
   -H 'content-type: application/json' \
   -d '{"query":{"match":{"text":"API authentication"}},"size":5}'
@@ -146,8 +149,11 @@ qli serve
 Use `GET /_help` to inspect routes, fields, and JSON DSL examples.
 Use `GET /_knowledge_bases` to list the mounted knowledge base prefixes.
 Use `POST /_infer` to produce dense and sparse query vectors from text.
+Use `POST /_simplesearch` for the same options as `qli search`. It defaults to hybrid retrieval and performs vector inference inside the request when vector indexes exist.
 Use `POST /_search` or `POST /<configured-index-name>/_search` for a single workspace.
+Use `POST /<configured-index-name>/_simplesearch` for simple search against a single workspace by configured index name.
 Use `POST /<directory-name>/_search` when `--workspace` points to a directory whose children are packaged `.zip` workspaces or directories that contain `.kb`.
+Use `POST /<directory-name>/_simplesearch` for simple search in multi-KB mode.
 Use `POST /<directory-name>/_infer` before vector searches in multi-KB mode.
 Packaged `.zip` knowledge bases are mounted read-only from the archive. `qli serve` does not extract them to workspace directories.
 
@@ -449,12 +455,13 @@ qli serve --workspace ./docs-kb.zip --port 4000
 qli serve --workspace ./kbs --host 0.0.0.0 --port 4000
 ```
 
-For a single workspace, use `POST /_search` or `POST /<configured-index-name>/_search`.
-For a directory of knowledge bases, use `POST /<directory-name>/_search`. Child `.zip` files use the file stem as the route name.
+For a single workspace, use `POST /_simplesearch`, `POST /_search`, or their `/<configured-index-name>/...` forms.
+For a directory of knowledge bases, use `POST /<directory-name>/_simplesearch` or `POST /<directory-name>/_search`. Child `.zip` files use the file stem as the route name.
+Use `_simplesearch` when the caller has text and wants the `qli search` workflow in one request. It accepts `query`, `topK`, `source`, `sourceName`, `sourceType`, `uriPrefix`, `tag`, `metadata`, date filters, `retrieval`, and `showChunks`.
 Use `POST /_infer` or `POST /<directory-name>/_infer` to turn query text into vectors before vector search.
 Use `GET /_knowledge_bases` to list the available prefixes before querying.
 Use `GET /_help` for route and request examples.
-The request body must be a Querylight JSON DSL object.
+The `_search` request body must be a Querylight JSON DSL object.
 Packaged `.zip` knowledge bases are mounted read-only from the archive. `qli serve` does not extract them to workspace directories.
 Index files are loaded once per knowledge base and reused across requests.
 
