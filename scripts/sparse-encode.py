@@ -63,6 +63,21 @@ def sparse_vector_from_row(row, top_tokens: int):
     return vector
 
 
+def normalize_text(value):
+    if isinstance(value, str):
+        text = value
+    elif value is None:
+        text = ""
+    elif isinstance(value, (bytes, bytearray)):
+        text = value.decode("utf-8", errors="replace")
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except TypeError:
+            text = str(value)
+    return text.replace("\x00", " ")
+
+
 def encode_document_batch(model, tokenizer, texts: list[str], top_tokens: int, special_token_ids: list[int]):
     features = tokenizer(texts, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False)
     with torch.no_grad():
@@ -97,29 +112,73 @@ def download_only(model_id: str):
     }
 
 
+def error_summary(error: Exception) -> str:
+    return f"{type(error).__name__}: {error}"
+
+
 def encode_documents(model_id: str, top_tokens: int, batch_size: int, documents):
     tokenizer, model, special_token_ids = load_runtime(model_id)
     output_documents = []
+    skipped_documents = []
     batch_size = max(1, batch_size)
+    normalized_documents = [
+        {
+            "chunkId": document["chunkId"],
+            "text": normalize_text(document.get("text")),
+        }
+        for document in documents
+    ]
     for offset in range(0, len(documents), batch_size):
-        batch = documents[offset:offset + batch_size]
-        vectors = encode_document_batch(
-            model,
-            tokenizer,
-            [document["text"] for document in batch],
-            top_tokens,
-            special_token_ids,
+        batch = normalized_documents[offset:offset + batch_size]
+        try:
+            vectors = encode_document_batch(
+                model,
+                tokenizer,
+                [document["text"] for document in batch],
+                top_tokens,
+                special_token_ids,
+            )
+            for document, vector in zip(batch, vectors):
+                output_documents.append({
+                    "chunkId": document["chunkId"],
+                    "vector": vector
+                })
+        except Exception:
+            for document in batch:
+                try:
+                    vector = encode_document_batch(
+                        model,
+                        tokenizer,
+                        [document["text"]],
+                        top_tokens,
+                        special_token_ids,
+                    )[0]
+                except Exception as document_error:
+                    skipped_documents.append({
+                        "chunkId": document["chunkId"],
+                        "error": error_summary(document_error),
+                    })
+                    output_documents.append({
+                        "chunkId": document["chunkId"],
+                        "vector": {}
+                    })
+                    continue
+                output_documents.append({
+                    "chunkId": document["chunkId"],
+                    "vector": vector
+                })
+
+    if normalized_documents and len(skipped_documents) == len(normalized_documents):
+        raise RuntimeError(
+            f"sparse encoding failed for all {len(normalized_documents)} documents; "
+            f"first error: {skipped_documents[0]['error']}"
         )
-        for document, vector in zip(batch, vectors):
-            output_documents.append({
-                "chunkId": document["chunkId"],
-                "vector": vector
-            })
 
     return {
         "query_token_weights": build_query_token_weight_vector(tokenizer, model_id),
         "documents": output_documents,
-        "vocabularySize": tokenizer.vocab_size
+        "vocabularySize": tokenizer.vocab_size,
+        "skipped_documents": skipped_documents
     }
 
 

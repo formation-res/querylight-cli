@@ -3,14 +3,19 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { hashJson } from "../core/gzip-json.js";
 import { readJsonl } from "../core/jsonl.js";
-import { reportProgress, type ProgressHandler } from "../core/progress.js";
+import { reportProgress, reportProgressDetail, type ProgressHandler } from "../core/progress.js";
 import type { ChunkRecord, SparseVectorMetadata, SparseVectorPayload, SparseVectorRecord, WorkspaceConfig } from "../types/models.js";
 import { ensureUvAvailable, getDenseTransformersRuntime, resolveCacheDir, runSparsePython } from "./runtime.js";
 import { readSparsePayload, writeSparsePayload } from "./store.js";
 import { createSparseChunkText } from "./text.js";
 
 let sparseQueryEncoderFactory: ((cacheDir: string, modelId: string, queryTokenWeights: number[]) => Promise<(text: string) => Promise<SparseVector>>) | null = null;
-let sparseDocumentBuilderFactory: ((workspacePath: string, config: WorkspaceConfig["retrieval"]["sparse"], chunks: ChunkRecord[]) => Promise<{ queryTokenWeights: number[]; vocabularySize: number; chunks: SparseVectorRecord[] }>) | null = null;
+let sparseDocumentBuilderFactory: ((workspacePath: string, config: WorkspaceConfig["retrieval"]["sparse"], chunks: ChunkRecord[]) => Promise<{
+  queryTokenWeights: number[];
+  vocabularySize: number;
+  chunks: SparseVectorRecord[];
+  skippedChunks?: Array<{ chunkId: string; error: string }>;
+}>) | null = null;
 
 export function setSparseQueryEncoderFactoryForTests(
   factory: ((cacheDir: string, modelId: string, queryTokenWeights: number[]) => Promise<(text: string) => Promise<SparseVector>>) | null
@@ -19,9 +24,37 @@ export function setSparseQueryEncoderFactoryForTests(
 }
 
 export function setSparseDocumentBuilderFactoryForTests(
-  factory: ((workspacePath: string, config: WorkspaceConfig["retrieval"]["sparse"], chunks: ChunkRecord[]) => Promise<{ queryTokenWeights: number[]; vocabularySize: number; chunks: SparseVectorRecord[] }>) | null
+  factory: ((workspacePath: string, config: WorkspaceConfig["retrieval"]["sparse"], chunks: ChunkRecord[]) => Promise<{
+    queryTokenWeights: number[];
+    vocabularySize: number;
+    chunks: SparseVectorRecord[];
+    skippedChunks?: Array<{ chunkId: string; error: string }>;
+  }>) | null
 ): void {
   sparseDocumentBuilderFactory = factory;
+}
+
+export function normalizeSparseDocumentText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.replaceAll("\u0000", " ");
+  }
+  if (value == null) {
+    return "";
+  }
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) {
+    return value.toString("utf8").replaceAll("\u0000", " ");
+  }
+  if (value instanceof Uint8Array) {
+    return new TextDecoder().decode(value).replaceAll("\u0000", " ");
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value).replaceAll("\u0000", " ");
+    } catch {
+      return String(value).replaceAll("\u0000", " ");
+    }
+  }
+  return String(value).replaceAll("\u0000", " ");
 }
 
 function buildSparseQueryVector(tokenIds: number[], tokenWeights: number[]): SparseVector {
@@ -93,9 +126,18 @@ async function buildSparseDocuments(
   workspacePath: string,
   config: WorkspaceConfig["retrieval"]["sparse"],
   chunks: ChunkRecord[]
-): Promise<{ queryTokenWeights: number[]; vocabularySize: number; chunks: SparseVectorRecord[] }> {
+): Promise<{
+  queryTokenWeights: number[];
+  vocabularySize: number;
+  chunks: SparseVectorRecord[];
+  skippedChunks: Array<{ chunkId: string; error: string }>;
+}> {
   if (sparseDocumentBuilderFactory) {
-    return sparseDocumentBuilderFactory(workspacePath, config, chunks);
+    const built = await sparseDocumentBuilderFactory(workspacePath, config, chunks);
+    return {
+      ...built,
+      skippedChunks: built.skippedChunks ?? []
+    };
   }
   await ensureUvAvailable();
   const output = JSON.parse(await runSparsePython({
@@ -109,18 +151,20 @@ async function buildSparseDocuments(
       batch_size: config.documentBatchSize,
       documents: chunks.map((chunk) => ({
         chunkId: chunk.id,
-        text: createSparseChunkText(chunk)
+        text: normalizeSparseDocumentText(createSparseChunkText(chunk))
       }))
     }
   })) as {
     query_token_weights: number[];
     vocabularySize: number;
     documents: Array<{ chunkId: string; vector: Record<string, number> }>;
+    skipped_documents?: Array<{ chunkId: string; error: string }>;
   };
   const byId = new Map(output.documents.map((document) => [document.chunkId, document.vector]));
   return {
     queryTokenWeights: output.query_token_weights,
     vocabularySize: output.vocabularySize,
+    skippedChunks: output.skipped_documents ?? [],
     chunks: chunks.map((chunk) => ({
       chunkId: chunk.id,
       documentId: chunk.documentId,
@@ -148,6 +192,15 @@ export async function buildSparseVectors(
   const chunks = await readJsonl<ChunkRecord>(path.join(workspacePath, "chunks", "chunks.jsonl"));
   reportProgress(progress, `Encoding ${chunks.length} chunk${chunks.length === 1 ? "" : "s"} for sparse retrieval`);
   const built = await buildSparseDocuments(workspacePath, config, chunks);
+  if (built.skippedChunks.length > 0) {
+    reportProgress(
+      progress,
+      `Skipped sparse vectors for ${built.skippedChunks.length} chunk${built.skippedChunks.length === 1 ? "" : "s"} due to encoding errors`
+    );
+    for (const skipped of built.skippedChunks) {
+      reportProgressDetail(progress, `Skipped sparse chunk ${skipped.chunkId}: ${skipped.error}`);
+    }
+  }
   reportProgress(progress, "Building sparse vector index");
   const index = new SparseVectorFieldIndex();
   for (const record of built.chunks) {

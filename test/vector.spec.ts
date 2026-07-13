@@ -11,7 +11,7 @@ import { createContext } from "../src/query/context-builder.js";
 import { readDensePayload, readSparsePayload, writeDensePayload } from "../src/vector/store.js";
 import { createDenseChunkText, createSparseChunkText } from "../src/vector/text.js";
 import { setDenseEmbedderFactoryForTests } from "../src/vector/dense.js";
-import { setSparseDocumentBuilderFactoryForTests, setSparseQueryEncoderFactoryForTests } from "../src/vector/sparse.js";
+import { normalizeSparseDocumentText, setSparseDocumentBuilderFactoryForTests, setSparseQueryEncoderFactoryForTests } from "../src/vector/sparse.js";
 import { cleanupTempDirs, tempWorkspace } from "./helpers.js";
 
 function fakeDenseEmbedding(text: string): number[] {
@@ -123,6 +123,13 @@ describe("vector helpers and retrieval", () => {
     expect(denseText).toContain("controlled OpenClaw and OpenShell stack");
     expect(denseText).not.toContain("Overview");
     expect(denseText).not.toContain("What You Get");
+  });
+
+  it("normalizes sparse payload text to a tokenizer-safe string", () => {
+    expect(normalizeSparseDocumentText("hello\u0000world")).toBe("hello world");
+    expect(normalizeSparseDocumentText(null)).toBe("");
+    expect(normalizeSparseDocumentText({ nested: true })).toBe("{\"nested\":true}");
+    expect(normalizeSparseDocumentText(new Uint8Array([104, 105]))).toBe("hi");
   });
 
   it("builds dense and sparse vector artifacts and searches all retrieval modes", async () => {
@@ -243,6 +250,119 @@ describe("vector helpers and retrieval", () => {
     const context = await createContext({ workspacePath, query: "bm25 ranking", topK: 5, maxChars: 500, retrievalMode: "hybrid" });
     expect(context.retrievalMode).toBe("hybrid");
     expect(context.markdown).toContain("Chunk ID:");
+  });
+
+  it("keeps sparse builds alive when a single chunk is skipped", async () => {
+    const root = await tempWorkspace("qli-vector-");
+    process.env.QLI_HOME = path.join(root, ".qli-home");
+    const { workspacePath } = await ensureWorkspace({ workspacePath: path.join(root, ".kb") });
+    await writeJsonl(path.join(workspacePath, "sources", "sources.jsonl"), [
+      {
+        id: "src1",
+        type: "directory",
+        name: "Docs",
+        uri: "/tmp/docs",
+        enabled: true,
+        tags: ["docs"],
+        metadata: {},
+        createdAt: "2026-05-18T00:00:00.000Z",
+        updatedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+    await writeJsonl(path.join(workspacePath, "documents", "documents.jsonl"), [
+      {
+        id: "doc1",
+        sourceId: "src1",
+        sourceType: "directory",
+        title: "Good",
+        uri: "file:///good.md",
+        mimeType: "text/markdown",
+        normalizedPath: "unused",
+        contentHash: "hash1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "doc2",
+        sourceId: "src1",
+        sourceType: "directory",
+        title: "Bad",
+        uri: "file:///bad.md",
+        mimeType: "text/markdown",
+        normalizedPath: "unused",
+        contentHash: "hash2",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+    await writeJsonl(path.join(workspacePath, "chunks", "chunks.jsonl"), [
+      {
+        id: "chunk-good",
+        documentId: "doc1",
+        sourceId: "src1",
+        title: "Good",
+        uri: "file:///good.md",
+        headingPath: [],
+        text: "good content",
+        contentHash: "c1",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      },
+      {
+        id: "chunk-bad",
+        documentId: "doc2",
+        sourceId: "src1",
+        title: "Bad",
+        uri: "file:///bad.md",
+        headingPath: [],
+        text: "bad content",
+        contentHash: "c2",
+        metadata: { tags: ["docs"] },
+        firstSeenAt: "2026-05-18T00:00:00.000Z",
+        lastSeenAt: "2026-05-18T00:00:00.000Z",
+        lastChangedAt: "2026-05-18T00:00:00.000Z"
+      }
+    ]);
+
+    setDenseEmbedderFactoryForTests(async () => async () => [1, 0, 0]);
+    setSparseDocumentBuilderFactoryForTests(async (_workspacePath, _config, chunks) => ({
+      queryTokenWeights: [0, 0, 7],
+      vocabularySize: 3,
+      skippedChunks: [{ chunkId: "chunk-bad", error: "TypeError: tokenizer rejected input" }],
+      chunks: chunks.map((chunk) => ({
+        chunkId: chunk.id,
+        documentId: chunk.documentId,
+        sourceId: chunk.sourceId,
+        title: chunk.title,
+        uri: chunk.uri,
+        headingPath: chunk.headingPath,
+        text: chunk.text,
+        vector: (chunk.id === "chunk-good" ? { "2": 7 } : {}) as Record<string, number>
+      }))
+    }));
+
+    const progress: string[] = [];
+    const build = await buildIndex({
+      workspacePath,
+      denseOverride: true,
+      sparseOverride: true,
+      progress: (_level, message) => {
+        progress.push(message);
+      }
+    });
+
+    expect(build.sparseBuilt).toBe(true);
+    const sparse = await readSparsePayload(workspacePath);
+    expect(sparse.chunks).toHaveLength(2);
+    expect(sparse.chunks.find((chunk) => chunk.chunkId === "chunk-bad")?.vector).toEqual({});
+    expect(progress).toContain("Skipped sparse vectors for 1 chunk due to encoding errors");
+    expect(progress).toContain("Skipped sparse chunk chunk-bad: TypeError: tokenizer rejected input");
   });
 
   it("finds related documents from dense document embeddings", async () => {
